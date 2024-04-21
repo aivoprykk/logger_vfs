@@ -1,0 +1,90 @@
+menu "Logger Storage configuration"
+    menu "SD Card Configuration"
+        config SD_MOUNT_POINT
+            string "SD card mount point in VFS"
+            default "/sdcard"
+            help
+                Specify the sd card mount point in VFS.
+        config SD_PIN_MOSI
+            int "MOSI GPIO number"
+            default 15 if IDF_TARGET_ESP32
+            default 11 if HAS_BOARD_LILYGO_T_DISPLAY_S3
+            default 4  # C3 and others
+
+        config SD_PIN_MISO
+            int "MISO GPIO number"
+            default 2 if IDF_TARGET_ESP32
+            default 13 if HAS_BOARD_LILYGO_T_DISPLAY_S3
+            default 6  # C3 and others
+
+        config SD_PIN_CLK
+            int "CLK GPIO number"
+            default 14 if IDF_TARGET_ESP32
+            default 12 if HAS_BOARD_LILYGO_T_DISPLAY_S3
+            default 5  # C3 and others
+
+        config SD_PIN_CS
+            int "CS GPIO number"
+            default 13 if IDF_TARGET_ESP32
+            default 10 if HAS_BOARD_LILYGO_T_DISPLAY_S3
+            default 1  # C3 and others
+
+    endmenu
+    menu "Fatfs Configuration"
+        config USE_FATFS
+            bool "Use FatFS System Flash Partition"
+            default false
+            help
+                Use System Flash Partition for fatfs
+        config FATFS_MOUNT_POINT
+            string "Fatfs mount point in VFS"
+            depends on USE_FATFS
+            default "/fatfs"
+            help
+                Specify the fatfs mount point in VFS.
+        config FATFS_PARTITION_LABEL
+            string "Fatfs partition label in VFS"
+            depends on USE_FATFS
+            default "fatstorage"
+            help
+                Specify the fatfs partition raw label defined in custom_partitions.csv.
+    endmenu
+    menu "Spiffs Configuration"
+        config USE_SPIFFS
+            bool "Use Spiffs System Flash Partition"
+            default false
+            help
+                Use System Flash Partition for spiffs
+        config SPIFFS_MOUNT_POINT
+            string "Spiffs mount point in VFS"
+            depends on USE_SPIFFS
+            default "/spiffs"
+            help
+                Specify the spiffs mount point in VFS.
+        config SPIFFS_PARTITION_LABEL
+            string "Spiffs partition label in VFS"
+            depends on USE_SPIFFS
+            default "spiffstore"
+            help
+                Specify the spiffs partition raw label defined in custom_partitions.csv.
+    endmenu
+    menu "Littlefs Configuration"
+        config USE_LITTLEFS
+            bool "Use Littlefs System Flash Partition"
+            default false
+            help
+                Use System Flash Partition for littlefs
+        config LITTLEFS_MOUNT_POINT
+            string "Littlefs mount point in VFS"
+            depends on USE_LITTLEFS
+            default "/littlefs"
+            help
+                Specify the littlefs mount point in VFS.
+        config LITTLEFS_PARTITION_LABEL
+            string "Littlefs partition label in VFS"
+            depends on USE_LITTLEFS
+            default "littlefstore"
+            help
+                Specify the littlefs partition raw label defined in custom_partitions.csv.
+    endmenu
+endmenu
