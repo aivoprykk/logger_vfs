@@ -25,6 +25,7 @@
 
 #define WRITE_BUFFER_SIZE (16 * 1024)
 static const char *TAG = "vfs_fat_sdspi";
+TIMER_INIT
 
 typedef struct wl_context_s {
     uint8_t mounted;
@@ -179,7 +180,7 @@ int sdcard_init(void) {
         .max_transfer_sz = 2000,
     };
 
-    ret = spi_bus_initialize(wl_ctx.host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
+    ret = spi_bus_initialize(wl_ctx.host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize bus (%s),", esp_err_to_name(ret));
         // return ret;

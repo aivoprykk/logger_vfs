@@ -26,6 +26,7 @@ typedef struct wl_context_s {
 static struct wl_context_s wl_ctx = WL_CONTEXT_INIT;
 
 static const char *TAG = "vfs_littlefs";
+TIMER_INIT
 
 int littlefs_init() {
     TIMER_S
