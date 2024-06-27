@@ -1,0 +1,6 @@
+dependencies:
+  idf:
+    version: '>=5.0'
+description: ESP GPS Logger virtual file systems component for ESP-IDF
+url: https://github.com/aivoprykk/logger_vfs.git
+version: 0.1.0
