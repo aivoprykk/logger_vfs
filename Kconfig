@@ -45,7 +45,7 @@ menu "Logger Storage configuration"
         config FATFS_PARTITION_LABEL
             string "Fatfs partition label in VFS"
             depends on USE_FATFS
-            default "fatstorage"
+            default "fatstore"
             help
                 Specify the fatfs partition raw label defined in custom_partitions.csv.
     endmenu
@@ -64,7 +64,7 @@ menu "Logger Storage configuration"
         config SPIFFS_PARTITION_LABEL
             string "Spiffs partition label in VFS"
             depends on USE_SPIFFS
-            default "spiffstore"
+            default "spifstore"
             help
                 Specify the spiffs partition raw label defined in custom_partitions.csv.
     endmenu
@@ -83,7 +83,7 @@ menu "Logger Storage configuration"
         config LITTLEFS_PARTITION_LABEL
             string "Littlefs partition label in VFS"
             depends on USE_LITTLEFS
-            default "littlefstore"
+            default "littlestore"
             help
                 Specify the littlefs partition raw label defined in custom_partitions.csv.
     endmenu

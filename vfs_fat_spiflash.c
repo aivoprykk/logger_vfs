@@ -25,6 +25,8 @@ typedef struct wl_context_s {
 static struct wl_context_s wl_ctx = WL_CONTEXT_INIT;
 
 static const char *TAG = "vfs_fat_spiflash";
+TIMER_INIT
+
 #define FATFS_MODE_READ_ONLY 0
 #define FATFS_LONG_NAMES 1
 

@@ -33,6 +33,8 @@ typedef struct wl_context_s {
     sdmmc_card_t * volume_handle;
     sdmmc_host_t host;
     size_t allocation_unit_size;
+    spi_bus_config_t bus_cfg;
+    sdspi_device_config_t slot_config;
 } wl_context_t;
 
 # define WL_CONTEXT_INIT {0, CONFIG_SD_MOUNT_POINT, 0, {0}, WRITE_BUFFER_SIZE}
@@ -143,15 +145,6 @@ int sdcard_init(void) {
     gpio_set_pull_mode(CONFIG_SD_PIN_MISO, GPIO_PULLUP_ONLY);
     gpio_set_pull_mode(CONFIG_SD_PIN_MOSI, GPIO_PULLUP_ONLY);
 
-    // Options for mounting the filesystem.
-    // If format_if_mount_failed is set to true, SD card will be partitioned and
-    // formatted in case when mounting fails.
-    // FATFS out_fs;
-    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = false,
-        .max_files = 8,
-        .allocation_unit_size = wl_ctx.allocation_unit_size};
-
     ESP_LOGI(TAG, "Initializing SD card");
 
     // Use settings defined above to initialize SD card and mount FAT
@@ -179,6 +172,7 @@ int sdcard_init(void) {
         .quadhd_io_num = -1,
         .max_transfer_sz = 2000,
     };
+    memcpy(&wl_ctx.bus_cfg, &bus_cfg, sizeof(spi_bus_config_t));
 
     ret = spi_bus_initialize(wl_ctx.host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK) {
@@ -192,13 +186,28 @@ int sdcard_init(void) {
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = CONFIG_SD_PIN_CS;
     slot_config.host_id = wl_ctx.host.slot;
+    memcpy(&wl_ctx.slot_config, &slot_config, sizeof(sdspi_device_config_t));
 
+    done:
+    TIMER_E
+    return ret;
+}
+
+int sdcard_mount(void) {
+    TIMER_S
+    esp_err_t ret = ESP_OK;
     ESP_LOGI(TAG, "Mounting filesystem");
-
-    ret = esp_vfs_fat_sdspi_mount(wl_ctx.mount_point, &wl_ctx.host, &slot_config, &mount_config, &wl_ctx.volume_handle);
-    // ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config,
-    // &mount_config, &volume_handle);
-    delay_ms(100);
+    // Options for mounting the filesystem.
+    // If format_if_mount_failed is set to true, SD card will be partitioned and
+    // formatted in case when mounting fails.
+    // FATFS out_fs;
+    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+        .format_if_mount_failed = false,
+        .max_files = 8,
+        .allocation_unit_size = wl_ctx.allocation_unit_size};
+    ret = esp_vfs_fat_sdspi_mount(wl_ctx.mount_point, &wl_ctx.host, &wl_ctx.slot_config, &mount_config, &wl_ctx.volume_handle);
+    
+    delay_ms(50);
 
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
@@ -213,6 +222,9 @@ int sdcard_init(void) {
         }
         esp_event_post(LOGGER_EVENT, LOGGER_EVENT_SDCARD_MOUNT_FAILED, 0, 0, portMAX_DELAY);
         goto done;
+    }
+    else {
+        wl_ctx.mounted = 1;
     }
     ESP_LOGI(TAG, "Filesystem mounted at %s", wl_ctx.mount_point);
     if (!ret && wl_ctx.volume_handle) {
@@ -239,31 +251,34 @@ int sdcard_init(void) {
             unlink(".test");
         }
 #endif
-        /* if (stat("Archive", &st) != 0) {
-          ret = mkdir("Archive", 0775);
-          if (ret == ESP_FAIL) {
-            ESP_LOGE(TAG, "mkdir %d failed", "Archive");
-          }
-        } */
     }
     done:
     TIMER_E
     return ret;
 }
 
-void sdcard_uninit(void) {
-    if (!wl_ctx.volume_handle) {
-        ESP_LOGE(TAG, "Card not present");
-        return;
-    }
-    esp_err_t ret;
+void sdcard_umount(void) {
     // All done, unmount partition and disable SDMMC peripheral
-    ret = esp_vfs_fat_sdcard_unmount(wl_ctx.mount_point, wl_ctx.volume_handle);
-    #ifdef DEBUG
-    if (ret == ESP_OK)
-        ESP_LOGD(TAG, "Card unmounted");
-    #endif
-    esp_event_post(LOGGER_EVENT, LOGGER_EVENT_SDCARD_UNMOUNTED, 0, 0, portMAX_DELAY);
+    if(wl_ctx.mounted) {
+        if (!wl_ctx.volume_handle) {
+            ESP_LOGE(TAG, "Card not present");
+            return;
+        }
+        esp_err_t ret;
+        ret = esp_vfs_fat_sdcard_unmount(wl_ctx.mount_point, wl_ctx.volume_handle);
+        if (ret == ESP_OK)
+            ESP_LOGD(TAG, "Card unmounted");
+        esp_event_post(LOGGER_EVENT, LOGGER_EVENT_SDCARD_UNMOUNTED, 0, 0, portMAX_DELAY);
+        UNUSED_PARAMETER(ret);
+    }
+}
+
+void sdcard_uninit(void) {
+    esp_err_t ret;
     spi_bus_free(wl_ctx.host.slot);
     UNUSED_PARAMETER(ret);
+}
+
+bool sdcard_is_mounted(void) {
+    return wl_ctx.mounted;
 }

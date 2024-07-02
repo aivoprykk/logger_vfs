@@ -12,8 +12,8 @@
 
 #ifdef CONFIG_USE_SPIFFS
 #include "esp_spiffs.h"
-#define WRITE_BUFFER_SIZE (16 * 1024)
 static const char *TAG = "vfs_spiffs";
+TIMER_INIT
 typedef struct wl_context_s {
     uint8_t mounted;
     const char *mount_point;
