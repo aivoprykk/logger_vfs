@@ -25,7 +25,6 @@
 
 #define WRITE_BUFFER_SIZE (16 * 1024)
 static const char *TAG = "vfs_fat_sdspi";
-TIMER_INIT
 
 typedef struct wl_context_s {
     uint8_t mounted;
@@ -137,7 +136,6 @@ static uint32_t init_host_frequency() {
 }
 
 int sdcard_init(void) {
-    TIMER_S
     esp_err_t ret = ESP_OK;
 
     gpio_set_pull_mode(CONFIG_SD_PIN_CLK, GPIO_PULLUP_ONLY);
@@ -189,12 +187,10 @@ int sdcard_init(void) {
     memcpy(&wl_ctx.slot_config, &slot_config, sizeof(sdspi_device_config_t));
 
     done:
-    TIMER_E
     return ret;
 }
 
 int sdcard_mount(void) {
-    TIMER_S
     esp_err_t ret = ESP_OK;
     ESP_LOGI(TAG, "Mounting filesystem");
     // Options for mounting the filesystem.
@@ -253,7 +249,6 @@ int sdcard_mount(void) {
 #endif
     }
     done:
-    TIMER_E
     return ret;
 }
 

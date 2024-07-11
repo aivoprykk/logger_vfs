@@ -1,4 +1,4 @@
-menu "Logger Storage configuration"
+menu "Logger Storage Module Configuration"
     menu "SD Card Configuration"
         config SD_MOUNT_POINT
             string "SD card mount point in VFS"
