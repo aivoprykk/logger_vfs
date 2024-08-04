@@ -185,7 +185,7 @@ int sdcard_init(void) {
     slot_config.gpio_cs = CONFIG_SD_PIN_CS;
     slot_config.host_id = wl_ctx.host.slot;
     memcpy(&wl_ctx.slot_config, &slot_config, sizeof(sdspi_device_config_t));
-
+    esp_event_post(LOGGER_EVENT, LOGGER_EVENT_SDCARD_INIT_DONE, 0, 0, portMAX_DELAY);
     done:
     return ret;
 }
@@ -271,6 +271,7 @@ void sdcard_umount(void) {
 void sdcard_uninit(void) {
     esp_err_t ret;
     spi_bus_free(wl_ctx.host.slot);
+    esp_event_post(LOGGER_EVENT, LOGGER_EVENT_SDCARD_DEINIT_DONE, 0, 0, portMAX_DELAY);
     UNUSED_PARAMETER(ret);
 }
 
