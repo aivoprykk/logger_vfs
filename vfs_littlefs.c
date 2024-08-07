@@ -26,10 +26,10 @@ typedef struct wl_context_s {
 static struct wl_context_s wl_ctx = WL_CONTEXT_INIT;
 
 static const char *TAG = "vfs_littlefs";
-TIMER_INIT
 
 int littlefs_init() {
-    TIMER_S
+    LOG_INFO(TAG, "[%s]", __func__);
+    MEAS_START();
 
     /* Print chip information */
     esp_chip_info_t chip_info;
@@ -91,7 +91,7 @@ int littlefs_init() {
             ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
     }
     done:
-    TIMER_E
+    MEAS_END(TAG, "[%s] took %llu us", __func__);
     return ret;
 }
 

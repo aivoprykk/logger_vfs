@@ -25,13 +25,12 @@ typedef struct wl_context_s {
 static struct wl_context_s wl_ctx = WL_CONTEXT_INIT;
 
 static const char *TAG = "vfs_fat_spiflash";
-TIMER_INIT
 
 #define FATFS_MODE_READ_ONLY 0
 #define FATFS_LONG_NAMES 1
 
 int fatfs_init() {
-    TIMER_S
+    MEAS_START();
     ESP_LOGI(TAG, "Mounting FAT filesystem to mountpoint:%s, label:%s", wl_ctx.mount_point, wl_ctx.base_label);
     // To mount device we need name of device partition, define mount_point
     // and allow format partition in case if it is new one and was not formatted
@@ -60,7 +59,7 @@ int fatfs_init() {
         esp_event_post(LOGGER_EVENT, LOGGER_EVENT_FAT_PARTITION_MOUNTED, 0, 0, portMAX_DELAY);
     }
     end:
-    TIMER_E
+    MEAS_END(TAG, "[%s] took %llu us", __func__);
     return err;
 }
 

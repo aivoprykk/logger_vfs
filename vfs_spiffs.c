@@ -13,7 +13,6 @@
 #ifdef CONFIG_USE_SPIFFS
 #include "esp_spiffs.h"
 static const char *TAG = "vfs_spiffs";
-TIMER_INIT
 typedef struct wl_context_s {
     uint8_t mounted;
     const char *mount_point;
@@ -23,7 +22,7 @@ typedef struct wl_context_s {
 static struct wl_context_s wl_ctx = WL_CONTEXT_INIT;
 
 int spiffs_init(void) {
-    TIMER_S
+    MEAS_START();
     if(has_spiffs_partition() == 0) {
         ESP_LOGI(TAG, "SPIFFS partition not found");
         goto done;
@@ -53,7 +52,7 @@ int spiffs_init(void) {
         ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
     }
     done:
-    TIMER_E
+    MEAS_END(TAG,"[%s] took %llu us", __func__);
     return ESP_OK;
 }
 
