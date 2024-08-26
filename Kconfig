@@ -33,7 +33,7 @@ menu "Logger Storage Module Configuration"
     menu "Fatfs Configuration"
         config USE_FATFS
             bool "Use FatFS System Flash Partition"
-            default false
+            default n
             help
                 Use System Flash Partition for fatfs
         config FATFS_MOUNT_POINT
@@ -52,7 +52,7 @@ menu "Logger Storage Module Configuration"
     menu "Spiffs Configuration"
         config USE_SPIFFS
             bool "Use Spiffs System Flash Partition"
-            default false
+            default n
             help
                 Use System Flash Partition for spiffs
         config SPIFFS_MOUNT_POINT
@@ -71,7 +71,7 @@ menu "Logger Storage Module Configuration"
     menu "Littlefs Configuration"
         config USE_LITTLEFS
             bool "Use Littlefs System Flash Partition"
-            default false
+            default n
             help
                 Use System Flash Partition for littlefs
         config LITTLEFS_MOUNT_POINT
