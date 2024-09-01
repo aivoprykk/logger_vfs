@@ -9,6 +9,7 @@ extern "C" {
 
 int fatfs_init();
 int fatfs_uninit();
+bool fatfs_is_mounted(void);
 
 #ifdef __cplusplus
 }

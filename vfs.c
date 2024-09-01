@@ -12,7 +12,6 @@
 
 #include "vfs.h"
 #include "vfs_private.h"
-#include "logger_common.h"
 
 static const char *TAG = "vfs";
 
@@ -32,9 +31,8 @@ off_t s_xstat_file_size(int f) {
     return flength;
 }
 
-int get_file_path_width_base(char *topath, size_t pathlen, const char *name,
-                             const char *base) {
-    ESP_LOGI(TAG, "[%s] %s", __FUNCTION__, name);
+int get_file_path_width_base(char *topath, size_t pathlen, const char *name, const char *base) {
+    ILOG(TAG, "[%s] %s %s", __FUNCTION__, base ? base : "", name);
     assert(topath);
     char *p = topath;
     const char *mp = base;
@@ -73,6 +71,7 @@ int get_file_path_width_base(char *topath, size_t pathlen, const char *name,
 }
 
 FILE *s_open_file(const char *name, const char *base, const char *mode) {
+    ILOG(TAG, "[%s] %s %s", __FUNCTION__, base ? base : "", name);
     if (name == 0 || name[0] == 0)
         return 0;
     if (mode == 0)
@@ -86,11 +85,12 @@ FILE *s_open_file(const char *name, const char *base, const char *mode) {
         ESP_LOGE(TAG, "[%s] open '%s' failed '%s'.", __FUNCTION__, p, strerror(errno));
         return 0;
     }
-    ESP_LOGI(TAG, "[%s] file:'%s', mode:'%s'", __FUNCTION__, p, mode);
+    ILOG(TAG, "[%s] file:'%s', mode:'%s'", __FUNCTION__, p, mode);
     return f;
 }
 
 int s_open(const char *name, const char *base, const char *mode) {
+    ILOG(TAG, "[%s] %s %s", __FUNCTION__, base ? base : "", name);
     if (name == 0 || name[0] == 0)
         return -1;
     if (mode == 0)
@@ -117,14 +117,14 @@ int s_open(const char *name, const char *base, const char *mode) {
         ESP_LOGE(TAG, "[%s] open '%s' failed: '%s'", __FUNCTION__, p, strerror(errno));
         return -1;
     }
-    ESP_LOGI(TAG, "[%s] file:'%s', mode:'%s'", __FUNCTION__, p, mode);
+    ILOG(TAG, "[%s] file:'%s', mode:'%s'", __FUNCTION__, p, mode);
     return f;
 }
 
 esp_err_t s_write_file(const char *name, const char *base, char *data) {
+    ILOG(TAG, "[%s] %s %s", __FUNCTION__, base ? base : "", name);
     if (name == 0 || name[0] == 0)
         return ESP_FAIL;
-    ESP_LOGI(TAG, "[%s] file:%s", __FUNCTION__, name);
     FILE *f = s_open_file(name, base, "w");
     if (f == NULL) {
         return ESP_FAIL;
@@ -135,9 +135,9 @@ esp_err_t s_write_file(const char *name, const char *base, char *data) {
 }
 
 esp_err_t s_write(const char *name, const char *base, char *data, size_t len) {
+    ILOG(TAG, "[%s] %s %s", __FUNCTION__, base ? base : "", name);
     if (name == 0 || name[0] == 0)
         return ESP_FAIL;
-    ESP_LOGI(TAG, "[%s] file:%s", __FUNCTION__, name);
     int f = s_open(name, base, "w+");
     if (f == -1) {
         return ESP_FAIL;
@@ -156,6 +156,7 @@ esp_err_t s_write(const char *name, const char *base, char *data, size_t len) {
 }
 
 char *s_read_from_file(const char *name, const char *base) {
+    ILOG(TAG, "[%s] %s %s", __FUNCTION__, base ? base : "", name);
     if (name == 0 || name[0] == 0)
         return 0;
     char *buffer = 0;
@@ -178,6 +179,7 @@ char *s_read_from_file(const char *name, const char *base) {
 }
 
 int s_rename_file_n(const char *old, const char *new, uint8_t rmifexists) {
+    ILOG(TAG, "[%s] %s %s", __FUNCTION__, old, new);
     if (!old || !new)
         return -1;
     if (!s_xfile_exists(old))
@@ -196,6 +198,7 @@ int s_rename_file_n(const char *old, const char *new, uint8_t rmifexists) {
 }
 
 int s_rename_file(const char *old, const char *new, const char *base) {
+    ILOG(TAG, "[%s] %s %s %s", __FUNCTION__, base ? base : "", old, new);
     if (!old || !new)
         return -1;
     char path[PATH_MAX_CHAR_SIZE] = {0};

@@ -12,7 +12,6 @@
 
 #include "vfs_littlefs.h"
 #include "vfs_private.h"
-#include "logger_common.h"
 #include "logger_events.h"
 
 #ifdef CONFIG_USE_LITTLEFS
@@ -28,12 +27,13 @@ static struct wl_context_s wl_ctx = WL_CONTEXT_INIT;
 static const char *TAG = "vfs_littlefs";
 
 int littlefs_init() {
-    LOG_INFO(TAG, "[%s]", __func__);
-    MEAS_START();
+    ILOG(TAG, "[%s]", __func__);
+    IMEAS_START();
 
     /* Print chip information */
     esp_chip_info_t chip_info;
     esp_chip_info(&chip_info);
+#if CONFIG_LOGGER_VFS_LOG_LEVEL < 2
     printf("This is %s chip with %d CPU cores, WiFi%s%s, ",
             CONFIG_IDF_TARGET,
             chip_info.cores,
@@ -41,16 +41,17 @@ int littlefs_init() {
             (chip_info.features & CHIP_FEATURE_BLE) ? "/BLE" : "");
 
     printf("silicon revision %d, ", chip_info.revision);
+#endif
 
     uint32_t size_flash_chip = 0;
     esp_flash_get_size(NULL, &size_flash_chip);
     printf("%uMB %s flash\n", (unsigned int)size_flash_chip >> 20, (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
     esp_err_t ret = ESP_OK;
     if(has_littlefs_partition() == 0) {
-        ESP_LOGI(TAG, "LittleFS partition not found");
+        ESP_LOGW(TAG, "[%s] LittleFS partition not found", __func__);
         goto done;
     }
-    ESP_LOGI(TAG, "Initializing LittleFS");
+    ILOG(TAG, "[%s] Initializing LittleFS", __func__);
     esp_vfs_littlefs_conf_t conf = {
             .base_path = wl_ctx.mount_point,
             .partition_label = wl_ctx.base_label,
@@ -91,11 +92,12 @@ int littlefs_init() {
             ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
     }
     done:
-    MEAS_END(TAG, "[%s] took %llu us", __func__);
+    IMEAS_END(TAG, "[%s] took %llu us", __func__);
     return ret;
 }
 
 int littlefs_deinit() {
+    ILOG(TAG, "[%s]", __func__);
     if(wl_ctx.mounted == 0)
         return 0;
     esp_err_t ret = esp_vfs_littlefs_unregister(wl_ctx.base_label);

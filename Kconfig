@@ -36,6 +36,12 @@ menu "Logger Storage Module Configuration"
             default n
             help
                 Use System Flash Partition for fatfs
+        config FATFS_MODE_READ_ONLY
+            bool "Read only mode"
+            depends on USE_FATFS
+            default n
+            help
+                Enable read only mode for fatfs
         config FATFS_MOUNT_POINT
             string "Fatfs mount point in VFS"
             depends on USE_FATFS

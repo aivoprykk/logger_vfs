@@ -7,8 +7,6 @@
 #include "vfs_spiffs.h"
 #include "vfs_private.h"
 #include "logger_events.h"
-#include "logger_common.h"
-
 
 #ifdef CONFIG_USE_SPIFFS
 #include "esp_spiffs.h"
@@ -22,9 +20,10 @@ typedef struct wl_context_s {
 static struct wl_context_s wl_ctx = WL_CONTEXT_INIT;
 
 int spiffs_init(void) {
-    MEAS_START();
+    IMEAS_START();
+    ILOG(TAG, "[%s]", __func__);
     if(has_spiffs_partition() == 0) {
-        ESP_LOGI(TAG, "SPIFFS partition not found");
+        ESP_LOGW(TAG, "[%s] SPIFFS partition not found", __func__);
         goto done;
     }
     esp_vfs_spiffs_conf_t conf = {.base_path = wl_ctx.mount_point,
@@ -52,18 +51,16 @@ int spiffs_init(void) {
         ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
     }
     done:
-    MEAS_END(TAG,"[%s] took %llu us", __func__);
+    IMEAS_END(TAG,"[%s] took %llu us", __func__);
     return ESP_OK;
 }
 
 int spiffs_uninit() {
+    ILOG(TAG, "[%s]", __func__);
     if(wl_ctx.mounted == 0) {
         return 0;
     }
     esp_vfs_spiffs_unregister(NULL);
-    #ifdef DEBUG
-    ESP_LOGD(TAG, "SPIFFS unmounted");
-    #endif
     wl_ctx.mounted = 0;
     return 0;
 }
