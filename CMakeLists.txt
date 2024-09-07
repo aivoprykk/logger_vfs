@@ -1,6 +1,6 @@
 
 set(REQ esp_event)
-set(PRIVREQ esp_partition spi_flash fatfs spiffs esp_littlefs logger_common driver)
+set(PRIVREQ esp_partition spi_flash fatfs spiffs logger_common driver)
 file(GLOB SOURCES *.c)
 SET(INCS "include")
 SET(PRIVINCS ".")

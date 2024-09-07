@@ -97,15 +97,23 @@ static esp_err_t s_write_speed(const char *name) {
 uint32_t sdcard_space() {
     ILOG(TAG, "[%s]", __FUNCTION__);
     FATFS *fs;
-    DWORD fre_clust, fre_sect, tot_sect;
+    DWORD fre_clust, fre_sect
+#if (CONFIG_LOGGER_VFS_LOG_LEVEL < 2)
+        , tot_sect;
+#else
+    ;
+#endif
     /* Get volume information and free clusters of drive 0 */
     f_getfree(wl_ctx.mount_point, &fre_clust, &fs);
     /* Get total sectors and free sectors */
+#if (CONFIG_LOGGER_VFS_LOG_LEVEL < 2)
     tot_sect = (fs->n_fatent - 2) * fs->csize;
+#endif
     fre_sect = fre_clust * fs->csize;
     /* Print the free space (assuming 512 bytes/sector) */
-    ILOG(TAG,"%10lu KiB total drive space.\r\n%10lu MB available.\r\n%10lu free clust.\r\n",
-        (tot_sect / 2 / 1024), (fre_sect / 2 / 1024), fre_clust);
+#if (CONFIG_LOGGER_VFS_LOG_LEVEL < 2)
+    ILOG(TAG,"%10lu KiB total drive space.\r\n%10lu MB available.\r\n%10lu free clust.\r\n", (tot_sect / 2 / 1024), (fre_sect / 2 / 1024), fre_clust);
+#endif
     return (fre_sect / 2 / 1024);
 }
 

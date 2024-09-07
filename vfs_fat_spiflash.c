@@ -3,16 +3,15 @@
 #include <errno.h>
 
 #include "esp_log.h"
-#include "esp_vfs_fat.h"
 
-#include "vfs_fat_spiflash.h"
 #include "vfs_private.h"
 #include "logger_events.h"
-// #include "logger_common.h"
+#include "vfs_fat_spiflash.h"
 
 
 #ifdef CONFIG_USE_FATFS
-// #define WRITE_BUFFER_SIZE 4096
+#include "esp_vfs_fat.h"
+
 
 typedef struct wl_context_s {
     uint8_t mounted;
