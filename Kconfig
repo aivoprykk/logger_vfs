@@ -95,7 +95,7 @@ menu "Logger Storage Module Configuration"
     endmenu
     choice
         bool "Default log verbosity"
-        default LOGGER_VFS_LOG_LEVEL_WARN
+        default LOGGER_VFS_LOG_LEVEL_ERROR
         help
             Specify how important log should be added.
         config LOGGER_VFS_LOG_LEVEL_TRACE
