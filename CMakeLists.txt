@@ -1,6 +1,3 @@
-
-set(REQ esp_event)
-set(PRIVREQ esp_partition spi_flash fatfs spiffs logger_common driver)
 file(GLOB SOURCES *.c)
 SET(INCS "include")
 SET(PRIVINCS ".")
@@ -9,6 +6,26 @@ idf_component_register(
     SRCS ${SOURCES}
     INCLUDE_DIRS ${INCS}
     PRIV_INCLUDE_DIRS ${PRIVINCS}
-    REQUIRES ${REQ}
-    PRIV_REQUIRES ${PRIVREQ}
+    REQUIRES esp_event logger_common
+    PRIV_REQUIRES strutil
 )
+if(CONFIG_LOGGER_VFS_ENABLED)
+    target_link_libraries(${COMPONENT_LIB} PRIVATE idf::esp_partition)
+    if(CONFIG_USE_SD_CARD)
+        target_link_libraries(${COMPONENT_LIB} PRIVATE idf::spi_flash)
+        target_link_libraries(${COMPONENT_LIB} PRIVATE idf::sd_card)
+    endif()
+    if(CONFIG_USE_FATFS OR CONFIG_USE_SD_CARD)
+        target_link_libraries(${COMPONENT_LIB} PRIVATE idf::fatfs)
+    endif()
+    if(CONFIG_USE_SPIFFS)
+        target_link_libraries(${COMPONENT_LIB} PRIVATE idf::spiffs)
+    endif()
+    if(CONFIG_USE_LITTLEFS)
+        target_link_libraries(${COMPONENT_LIB} PRIVATE idf::littlefs)
+    endif()
+    if(NOT ${IDF_TARGET} STREQUAL "linux")
+        target_link_libraries(${COMPONENT_LIB} PUBLIC idf::vfs)
+        target_link_libraries(${COMPONENT_LIB} PRIVATE idf::driver)
+    endif()
+endif()

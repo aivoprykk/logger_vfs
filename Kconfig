@@ -1,122 +1,315 @@
 menu "Logger Storage Module Configuration"
-    menu "SD Card Configuration"
-        config SD_MOUNT_POINT
-            string "SD card mount point in VFS"
-            default "/sdcard"
+    config LOGGER_VFS_ENABLED
+        bool "Enable Logger Storage Module"
+        default y
+        help
+            Enable Logger Storage Module
+    if LOGGER_VFS_ENABLED
+        config USE_SD_CARD
+            bool "Use SD Card"
+            default y
             help
-                Specify the sd card mount point in VFS.
-        config SD_PIN_MOSI
-            int "MOSI GPIO number"
-            default 15 if IDF_TARGET_ESP32
-            default 11 if HAS_BOARD_LILYGO_T_DISPLAY_S3
-            default 4  # C3 and others
+                Use SD Card for storage
+        if USE_SD_CARD
+        menu "SD Card Configuration"
+            config SD_MOUNT_POINT
+                string "SD card mount point in VFS"
+                default "/sdcard"
+                help
+                    Specify the sd card mount point in VFS.
+            choice "SD Card Connection Type"
+                prompt "SD Card Connection Type (Change only if you know what you are doing)"
+                default SD_USE_SPI
+                config SD_USE_SPI
+                    bool "Use SD SPI"
+                    help
+                        Use SD SPI for SD Card
+                config SD_USE_SDMMC
+                    bool "Use SDMMC"
+                    help
+                        Use SDMMC for SD Card
+            endchoice
+            choice SD_MMC_SPEED_MODE
+                prompt "SD Card Speed Mode (Change only if you know what you are doing)"
+                default SD_MMC_SPEED_DEFAULT
+                config SD_MMC_SPEED_DEFAULT
+                    bool "Default Mode (20000MHz)"
+                    help
+                        Default Mode for SD card
+                config SD_MMC_SPEED_HS
+                    bool "Enable High Speed Mode (40000MHz)"
+                    help
+                        Enable High Speed Mode for SD card
+                config SD_MMC_SPEED_UHS_I_SDR50
+                    bool "Enable UHS-I SDR50 Mode (100000MHz)"
+                    help
+                        Enable UHS-I SDR50 Mode for SD card
+                config SD_MMC_SPEED_UHS_I_DDR50
+                    bool "Enable UHS-I DDR50 Mode (50000MHz)"
+                    help
+                        Enable UHS-I DDR50 Mode for SD card
+                config SD_MMC_SPEED_PROBING
+                    bool "Enable Probing Mode"
+                    help
+                        Enable Probing Mode for SD card
+            endchoice
+            if SD_USE_SPI
+            choice
+                prompt "SPI Host for the display controller"
+                default SD_SPI2_HOST if HAS_BOARD_LILYGO_EPAPER_T5
+                default SD_SPI3_HOST
+                config SD_SPI1_HOST
+                    bool "SPI1_HOST"
+                config SD_SPI2_HOST
+                    bool "SPI2_HOST"
+                config SD_SPI3_HOST
+                    bool "SPI3_HOST"
+            endchoice
+                config SD_PIN_MOSI
+                    int "M0S1 (CMD) GPIO number"
+                    default 15 if HAS_BOARD_LILYGO_EPAPER_T5
+                    default 11 if IDF_TARGET_ESP32S3
+                    default 4  # C3 and others
 
-        config SD_PIN_MISO
-            int "MISO GPIO number"
-            default 2 if IDF_TARGET_ESP32
-            default 13 if HAS_BOARD_LILYGO_T_DISPLAY_S3
-            default 6  # C3 and others
+                config SD_PIN_MISO
+                    int "MISO (SD0) GPIO number"
+                    default 2 if HAS_BOARD_LILYGO_EPAPER_T5
+                    default 13 if IDF_TARGET_ESP32S3
+                    default 6  # C3 and others
 
-        config SD_PIN_CLK
-            int "CLK GPIO number"
-            default 14 if IDF_TARGET_ESP32
-            default 12 if HAS_BOARD_LILYGO_T_DISPLAY_S3
-            default 5  # C3 and others
+                config SD_PIN_CS
+                    int "CS (SD3) GPIO number"
+                    default 13 if HAS_BOARD_LILYGO_EPAPER_T5
+                    default 10 if IDF_TARGET_ESP32S3
+                    default 1  # C3 and others
+            endif
+            if SD_USE_SDMMC
+                choice SD_MMC_BUS_WIDTH
+                    prompt "SD/MMC bus width"
+                    default SD_MMC_BUS_WIDTH_4
+                    help
+                        Select the bus width of SD or MMC interface.
+                        Note that even if 1 line mode is used, D3 pin of the SD card must have a pull-up resistor connected.
+                        Otherwise the card may enter SPI mode, the only way to recover from which is to cycle power to the card.
+            
+                    config SD_MMC_BUS_WIDTH_4
+                        bool "4 lines (D0 - D3)"
+            
+                    config SD_MMC_BUS_WIDTH_1
+                        bool "1 line (D0)"
+                endchoice
+                    config SD_PIN_CMD
+                        int "CMD (M0S1) GPIO number"
+                        default 15 if IDF_TARGET_ESP32
+                        default 11 if IDF_TARGET_ESP32S3
+                        default 4  # C3 and others
+                    config SD_PIN_D0
+                        int "D0 (MISO) GPIO number"
+                        default 2 if IDF_TARGET_ESP32
+                        default 13 if IDF_TARGET_ESP32S3
+                        default 6  # C3 and others
+                    if SD_MMC_BUS_WIDTH_4
+                        config SD_PIN_D1
+                            int "D1 GPIO number"
+                            default -1 if HAS_BOARD_LILYGO_EPAPER_T5
+                            default 4 if IDF_TARGET_ESP32
+                            default 14 if IDF_TARGET_ESP32S3
+                            default 7  # C3 and others
+                        config SD_PIN_D2
+                            int "D2 GPIO number"
+                            default -1 if HAS_BOARD_LILYGO_EPAPER_T5
+                            default 12 if IDF_TARGET_ESP32
+                            default 15 if IDF_TARGET_ESP32S3
+                            default 8  # C3 and others
+                        config SD_PIN_D3
+                            int "D3 GPIO number"
+                            default 13 if IDF_TARGET_ESP32
+                            default 2 if IDF_TARGET_ESP32S3
+                            default 9  # C3 and others
+                    endif
+                
+            endif
+            config SD_PIN_CLK
+                int "SCLK (SCK) GPIO number"
+                default 14 if IDF_TARGET_ESP32
+                default 12 if IDF_TARGET_ESP32S3
+                default 5  # C3 and others
+            config DEBUG_PIN_CONNECTIONS
+                bool "Debug SD pin connections and pullup strength"
+                default n
+                help
+                    Debug sd pin connections and pullup strength
+            config ENABLE_ADC_FEATURE
+                bool "Enable SD ADC feature"
+                depends on DEBUG_PIN_CONNECTIONS
+                default y if IDF_TARGET_ESP32
+                default n
+        
+            config VFS_ADC_UNIT
+                int "ADC Unit"
+                depends on DEBUG_PIN_CONNECTIONS && ENABLE_ADC_FEATURE
+                default 1 if IDF_TARGET_ESP32
+                default 0 if IDF_TARGET_ESP32S3
+                default 1
+            if ENABLE_ADC_FEATURE
+                config SD_ADC_PIN_CLK
+                    int "SCLK (SCK) mapped ADC pin"
+                    default 6 if IDF_TARGET_ESP32
+                    default 0 if IDF_TARGET_ESP32S3
+                    default 1
+                if SD_USE_SPI
+                    config SD_ADC_PIN_MOSI
+                        int "M0S1 (CMD) mapped ADC pin"
+                        default 3 if IDF_TARGET_ESP32
+                        default 7 if IDF_TARGET_ESP32S3
+                        default 1
+                    config SD_ADC_PIN_MISO
+                        int "MISO (SD0) mapped ADC pin"
+                        default 2 if IDF_TARGET_ESP32
+                        default 1 if IDF_TARGET_ESP32S3
+                        default 1
+                    config SD_ADC_PIN_CS
+                        int "CS (SD3) mapped ADC pin"
+                        default 4 if IDF_TARGET_ESP32
+                        default 6 if IDF_TARGET_ESP32S3
+                        default 1
+                endif
+                if SD_USE_SDMMC
+                    config SD_ADC_PIN_CMD
+                        int "CMD (M0S1) mapped ADC pin"
+                        default 15 if IDF_TARGET_ESP32
+                        default 1
+                
+                    config SD_ADC_PIN_D0
+                        int "D0 (MISO) mapped ADC pin"
+                        default 2 if IDF_TARGET_ESP32
+                        default 1
 
-        config SD_PIN_CS
-            int "CS GPIO number"
-            default 13 if IDF_TARGET_ESP32
-            default 10 if HAS_BOARD_LILYGO_T_DISPLAY_S3
-            default 1  # C3 and others
-
-    endmenu
-    menu "Fatfs Configuration"
+                    if SD_MMC_BUS_WIDTH_4
+                        config SD_ADC_PIN_D1
+                            int "D1 mapped ADC pin"
+                            default -1 if HAS_BOARD_LILYGO_EPAPER_T5
+                            default 4 if IDF_TARGET_ESP32
+                            default 1
+                
+                        config SD_ADC_PIN_D2
+                            int "D2 mapped ADC pin"
+                            default -1 if HAS_BOARD_LILYGO_EPAPER_T5
+                            default 12 if IDF_TARGET_ESP32
+                            default 1
+                
+                        config SD_ADC_PIN_D3
+                            int "D3 mapped ADC pin"
+                            default 13 if IDF_TARGET_ESP32
+                            default 1
+                    endif
+                endif
+            endif
+            config SD_PWR_CTRL_LDO_INTERNAL_IO
+                depends on SOC_SDMMC_IO_POWER_EXTERNAL
+                bool "SD power supply comes from internal LDO IO (READ HELP!)"
+                default y
+                help
+                    Only needed when the SD card is connected to specific IO pins which can be used for high-speed SDMMC.
+                    Please read the schematic first and check if the SD VDD is connected to any internal LDO output.
+                    Unselect this option if the SD card is powered by an external power supply.
+        
+            config SD_PWR_CTRL_LDO_IO_ID
+                depends on SOC_SDMMC_IO_POWER_EXTERNAL && SD_PWR_CTRL_LDO_INTERNAL_IO
+                int "LDO ID"
+                default 4 if IDF_TARGET_ESP32P4
+                help
+                    Please read the schematic first and input your LDO ID.
+        endmenu
+        endif
         config USE_FATFS
             bool "Use FatFS System Flash Partition"
+            default y if IDF_TARGET_ESP32S3
             default n
             help
                 Use System Flash Partition for fatfs
-        config FATFS_MODE_READ_ONLY
+        if USE_FATFS
+        menu "Fatfs Configuration"
+            config FATFS_MODE_READ_ONLY
             bool "Read only mode"
-            depends on USE_FATFS
             default n
             help
                 Enable read only mode for fatfs
         config FATFS_MOUNT_POINT
             string "Fatfs mount point in VFS"
-            depends on USE_FATFS
             default "/fatfs"
             help
                 Specify the fatfs mount point in VFS.
         config FATFS_PARTITION_LABEL
             string "Fatfs partition label in VFS"
-            depends on USE_FATFS
             default "fatstore"
             help
                 Specify the fatfs partition raw label defined in custom_partitions.csv.
-    endmenu
-    menu "Spiffs Configuration"
+        endmenu
+        endif
         config USE_SPIFFS
             bool "Use Spiffs System Flash Partition"
             default n
             help
                 Use System Flash Partition for spiffs
+        if USE_SPIFFS
+        menu "Spiffs Configuration"
         config SPIFFS_MOUNT_POINT
             string "Spiffs mount point in VFS"
-            depends on USE_SPIFFS
             default "/spiffs"
             help
                 Specify the spiffs mount point in VFS.
         config SPIFFS_PARTITION_LABEL
             string "Spiffs partition label in VFS"
-            depends on USE_SPIFFS
             default "spifstore"
             help
                 Specify the spiffs partition raw label defined in custom_partitions.csv.
-    endmenu
-    menu "Littlefs Configuration"
+        endmenu
+        endif
         config USE_LITTLEFS
             bool "Use Littlefs System Flash Partition"
             default n
             help
                 Use System Flash Partition for littlefs
-        config LITTLEFS_MOUNT_POINT
+        if USE_LITTLEFS
+        menu "Littlefs Configuration"
+            config LITTLEFS_MOUNT_POINT
             string "Littlefs mount point in VFS"
-            depends on USE_LITTLEFS
             default "/littlefs"
             help
                 Specify the littlefs mount point in VFS.
-        config LITTLEFS_PARTITION_LABEL
-            string "Littlefs partition label in VFS"
-            depends on USE_LITTLEFS
-            default "littlestore"
+            config LITTLEFS_PARTITION_LABEL
+                string "Littlefs partition label in VFS"
+                default "littlestore"
+                help
+                    Specify the littlefs partition raw label defined in custom_partitions.csv.
+        endmenu
+        endif
+        choice
+            bool "Logger VFS Log verbosity"
+            default LOGGER_VFS_LOG_LEVEL_ERROR
             help
-                Specify the littlefs partition raw label defined in custom_partitions.csv.
-    endmenu
-    choice
-        bool "Default log verbosity"
-        default LOGGER_VFS_LOG_LEVEL_ERROR
-        help
-            Specify how important log should be added.
-        config LOGGER_VFS_LOG_LEVEL_TRACE
-            bool "TRACE: A lot of logs to give detailed information"
-        config LOGGER_VFS_LOG_LEVEL_INFO
-            bool "INFO: Log important events"
-        config LOGGER_VFS_LOG_LEVEL_WARN
-            bool "WARN: Log if something unwanted happened but didn't cause a problem"
-        config LOGGER_VFS_LOG_LEVEL_ERROR
-            bool "ERROR: Only critical issues, when the system may fail"
-        config LOGGER_VFS_LOG_LEVEL_USER
-            bool "USER: Only logs added by the user"
-        config LOGGER_VFS_LOG_LEVEL_NONE
-            bool "NONE: Do not log anything"
-    endchoice
-    config LOGGER_VFS_LOG_LEVEL
-        int
-        default 0 if LOGGER_VFS_LOG_LEVEL_TRACE
-        default 1 if LOGGER_VFS_LOG_LEVEL_INFO
-        default 2 if LOGGER_VFS_LOG_LEVEL_WARN
-        default 3 if LOGGER_VFS_LOG_LEVEL_ERROR
-        default 4 if LOGGER_VFS_LOG_LEVEL_USER
-        default 5 if LOGGER_VFS_LOG_LEVEL_NONE
+                Specify how important log should be added.
+            config LOGGER_VFS_LOG_LEVEL_TRACE
+                bool "TRACE: A lot of logs to give detailed information"
+            config LOGGER_VFS_LOG_LEVEL_INFO
+                bool "INFO: Log important events"
+            config LOGGER_VFS_LOG_LEVEL_WARN
+                bool "WARN: Log if something unwanted happened but didn't cause a problem"
+            config LOGGER_VFS_LOG_LEVEL_ERROR
+                bool "ERROR: Only critical issues, when the system may fail"
+            config LOGGER_VFS_LOG_LEVEL_USER
+                bool "USER: Only logs added by the user"
+            config LOGGER_VFS_LOG_LEVEL_NONE
+                bool "NONE: Do not log anything"
+        endchoice
+        config LOGGER_VFS_LOG_LEVEL
+            int
+            default 0 if LOGGER_VFS_LOG_LEVEL_TRACE
+            default 1 if LOGGER_VFS_LOG_LEVEL_INFO
+            default 2 if LOGGER_VFS_LOG_LEVEL_WARN
+            default 3 if LOGGER_VFS_LOG_LEVEL_ERROR
+            default 4 if LOGGER_VFS_LOG_LEVEL_USER
+            default 5 if LOGGER_VFS_LOG_LEVEL_NONE
+    endif
 endmenu

@@ -1,17 +1,13 @@
 
 
-#include <errno.h>
-
-#include "esp_log.h"
-
 #include "vfs_private.h"
-#include "logger_events.h"
+#ifdef CONFIG_USE_FATFS
+
 #include "vfs_fat_spiflash.h"
 
-
-#ifdef CONFIG_USE_FATFS
 #include "esp_vfs_fat.h"
 
+#include "vfs_events.h"
 
 typedef struct wl_context_s {
     uint8_t mounted;
@@ -56,11 +52,11 @@ int fatfs_init() {
 #endif
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "[%s] Failed to mount FATFS (%s)", __func__, esp_err_to_name(err));
-        esp_event_post(LOGGER_EVENT, LOGGER_EVENT_FAT_PARTITION_MOUNT_FAILED, 0, 0, portMAX_DELAY);
+        esp_event_post(VFS_EVENT, VFS_EVENT_FAT_PARTITION_MOUNT_FAILED, 0, 0, portMAX_DELAY);
         goto end;
     } else {
         wl_ctx.mounted = 1;
-        esp_event_post(LOGGER_EVENT, LOGGER_EVENT_FAT_PARTITION_MOUNTED, 0, 0, portMAX_DELAY);
+        esp_event_post(VFS_EVENT, VFS_EVENT_FAT_PARTITION_MOUNTED, 0, 0, portMAX_DELAY);
     }
     end:
     IMEAS_END(TAG, "[%s] took %llu us", __func__);
@@ -80,7 +76,7 @@ int fatfs_uninit() {
 #endif
     ILOG(TAG, "[%s] Filesystem unmounted", __func__);
     wl_ctx.mounted = 0;
-    esp_event_post(LOGGER_EVENT, LOGGER_EVENT_FAT_PARTITION_UNMOUNTED, 0, 0, portMAX_DELAY);
+    esp_event_post(VFS_EVENT, VFS_EVENT_FAT_PARTITION_UNMOUNTED, 0, 0, portMAX_DELAY);
     return 0;
 }
 

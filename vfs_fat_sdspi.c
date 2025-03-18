@@ -1,25 +1,33 @@
 
 
-#include <errno.h>
+#include "vfs_private.h"
+#if defined(CONFIG_USE_SD_CARD)
+
 #include <string.h>
 
 #include "driver/sdmmc_host.h"
-#include "driver/sdmmc_types.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
 #include "driver/spi_master.h"
-#include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
+#ifdef CONFIG_DEBUG_PIN_CONNECTIONS
+#include "sd_test_io.h"
+#endif
 
 #include "vfs_fat_sdspi.h"
-#include "logger_events.h"
-#include "vfs_private.h"
-#include "logger_common.h"
 
-#if defined(CONFIG_HAS_BOARD_LILYGO_EPAPER_T5)
+#include "vfs_events.h"
+
+#if SOC_SDMMC_IO_POWER_EXTERNAL
+#include "sd_pwr_ctrl_by_on_chip_ldo.h"
+#endif
+
+#if defined(ONFIG_SD_SPI1_HOST)
+#define SDCARD_HOST SPI1_HOST
+#elif defined(CONFIG_SD_SPI2_HOST)
 #define SDCARD_HOST SPI2_HOST
-#else
+#elif defined(CONFIG_SD_SPI3_HOST)
 #define SDCARD_HOST SPI3_HOST
 #endif
 
@@ -32,8 +40,13 @@ typedef struct wl_context_s {
     sdmmc_card_t * volume_handle;
     sdmmc_host_t host;
     size_t allocation_unit_size;
+#if defined(CONFIG_SD_USE_SPI)
     spi_bus_config_t bus_cfg;
-    sdspi_device_config_t slot_config;
+    sdspi_device_config_t device_config;
+#else
+    #define _IS_UHS1    (CONFIG_SDMMC_SPEED_UHS_I_SDR50 || CONFIG_SDMMC_SPEED_UHS_I_DDR50)
+    sdmmc_slot_config_t device_config;
+#endif
 } wl_context_t;
 
 # define WL_CONTEXT_INIT {0, CONFIG_SD_MOUNT_POINT, 0, {0}, CONFIG_WL_SECTOR_SIZE}
@@ -49,7 +62,7 @@ static esp_err_t s_write_speed(const char *name) {
     ILOG(TAG, "[%s]", __FUNCTION__);
     if (name == 0 || *name == 0)
         return ESP_FAIL;
-    ILOG(TAG, "[%s] file:%s", __FUNCTION__, name);
+    // ILOG(TAG, "[%s] file:%s", __FUNCTION__, name);
     FILE *f = s_open_file(name, wl_ctx.mount_point, "w");
     if (f == NULL) {
         ESP_LOGE(TAG, "Failed to open file for writing");
@@ -63,14 +76,14 @@ static esp_err_t s_write_speed(const char *name) {
         write_buffer[i] = ' ' + (i % 64);
     }
 
-    ILOG(TAG, "[%s] Write to file ", __FUNCTION__);
+    // ILOG(TAG, "[%s] Write to file ", __FUNCTION__);
     uint64_t start = esp_timer_get_time();
     for (int counter = 0; counter < TIME_ARRAY_SIZE; counter++) {
         fwrite(write_buffer, 1, WRITE_BUFFER_SIZE, f);
         time_array[counter] = esp_timer_get_time();
     }
     fclose(f);
-    ILOG(TAG, "[%s] File written ", __FUNCTION__);
+    // ILOG(TAG, "[%s] File written ", __FUNCTION__);
 
     uint64_t sum = 0;
     uint64_t maximum = 0;
@@ -94,29 +107,6 @@ static esp_err_t s_write_speed(const char *name) {
 }
 #endif
 
-uint32_t sdcard_space() {
-    ILOG(TAG, "[%s]", __FUNCTION__);
-    FATFS *fs;
-    DWORD fre_clust, fre_sect
-#if (CONFIG_LOGGER_VFS_LOG_LEVEL < 2)
-        , tot_sect;
-#else
-    ;
-#endif
-    /* Get volume information and free clusters of drive 0 */
-    f_getfree(wl_ctx.mount_point, &fre_clust, &fs);
-    /* Get total sectors and free sectors */
-#if (CONFIG_LOGGER_VFS_LOG_LEVEL < 2)
-    tot_sect = (fs->n_fatent - 2) * fs->csize;
-#endif
-    fre_sect = fre_clust * fs->csize;
-    /* Print the free space (assuming 512 bytes/sector) */
-#if (CONFIG_LOGGER_VFS_LOG_LEVEL < 2)
-    ILOG(TAG,"%10lu KiB total drive space.\r\n%10lu MB available.\r\n%10lu free clust.\r\n", (tot_sect / 2 / 1024), (fre_sect / 2 / 1024), fre_clust);
-#endif
-    return (fre_sect / 2 / 1024);
-}
-
 static uint32_t init_host_frequency() {
     ILOG(TAG, "[%s]", __FUNCTION__);
     assert(wl_ctx.volume_handle->max_freq_khz <= wl_ctx.volume_handle->host.max_freq_khz);
@@ -125,12 +115,13 @@ static uint32_t init_host_frequency() {
      * which is below volume_handle->max_freq_khz.
      */
     const uint32_t freq_values[] = {
-        SDMMC_FREQ_52M, 
+        SDMMC_FREQ_SDR50,
+        SDMMC_FREQ_52M,
+        SDMMC_FREQ_DDR50,
         SDMMC_FREQ_HIGHSPEED, 
         SDMMC_FREQ_26M,
         SDMMC_FREQ_DEFAULT, 
         10000
-        // NOTE: in sdspi mode, 20MHz may not work. in that case, add 10MHz here.
     };
     const int n_freq_values = sizeof(freq_values) / sizeof(freq_values[0]);
 
@@ -146,57 +137,171 @@ static uint32_t init_host_frequency() {
     return selected_freq;
 }
 
+#ifdef CONFIG_DEBUG_PIN_CONNECTIONS
+#if defined(CONFIG_SD_USE_SPI)
+const char* names[] = {"CLK ", "MOSI", "MISO", "CS  "};
+#else
+const char* names[] = {"CLK", "CMD", "D0", "D1", "D2", "D3"};
+#endif
+const int pins[] = {
+#if defined(CONFIG_SD_USE_SPI)
+    CONFIG_SD_PIN_CLK,
+    CONFIG_SD_PIN_MOSI,
+    CONFIG_SD_PIN_MISO,
+    CONFIG_SD_PIN_CS
+#else
+    CONFIG_SD_PIN_CLK,
+    CONFIG_SD_PIN_CMD,
+    CONFIG_SD_PIN_D0
+    #ifdef CONFIG_SD_MMC_BUS_WIDTH_4
+    ,CONFIG_SD_PIN_D1,
+    CONFIG_SD_PIN_D2,
+    CONFIG_SD_PIN_D3
+    #endif
+#endif
+};
+
+const int pin_count = sizeof(pins)/sizeof(pins[0]);
+
+#if CONFIG_ENABLE_ADC_FEATURE
+const int adc_channels[] = {
+#if defined(CONFIG_SD_USE_SPI)
+    CONFIG_SD_ADC_PIN_CLK,
+    CONFIG_SD_ADC_PIN_MOSI,
+    CONFIG_SD_ADC_PIN_MISO,
+    CONFIG_SD_ADC_PIN_CS
+#else
+    CONFIG_SD_ADC_PIN_CLK,
+    CONFIG_SD_ADC_PIN_CMD,
+    CONFIG_SD_ADC_PIN_D0
+    #ifdef CONFIG_SD_MMC_BUS_WIDTH_4
+    ,CONFIG_SD_ADC_PIN_D1,
+    CONFIG_SD_ADC_PIN_D2,
+    CONFIG_SD_ADC_PIN_D3
+    #endif
+#endif
+};
+#endif //CONFIG_ENABLE_ADC_FEATURE
+
+pin_configuration_t config = {
+    .names = names,
+    .pins = pins,
+#if CONFIG_ENABLE_ADC_FEATURE
+    .adc_channels = adc_channels,
+#endif
+};
+#endif //CONFIG_DEBUG_PIN_CONNECTIONS
+
+
 int sdcard_init(void) {
     ILOG(TAG, "[%s]", __FUNCTION__);
     esp_err_t ret = ESP_OK;
 
-    gpio_set_pull_mode(CONFIG_SD_PIN_CLK, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode(CONFIG_SD_PIN_CS, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode(CONFIG_SD_PIN_MISO, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode(CONFIG_SD_PIN_MOSI, GPIO_PULLUP_ONLY);
-
-    // Use settings defined above to initialize SD card and mount FAT
-    // filesystem. Note: esp_vfs_fat_sdmmc/sdspi_mount is all-in-one convenience
-    // functions. Please check its source code and implement error recovery when
-    // developing production applications.
-
-    ILOG(TAG, "[%s] Using SPI peripheral", __func__);
-
+    sdmmc_host_t lhost = SDSPI_HOST_DEFAULT();
+    memcpy(&wl_ctx.host, &lhost, sizeof(sdmmc_host_t));
+    wl_ctx.host.slot = SDCARD_HOST;
     // By default, SD card frequency is initialized to SDMMC_FREQ_DEFAULT
     // (20MHz) For setting a specific frequency, use host.max_freq_khz (range
     // 400kHz - 40MHz for SDMMC) Example: for fixed frequency of 10MHz, use
-    // host.max_freq_khz = 10000;
-    sdmmc_host_t lhost = SDSPI_HOST_DEFAULT();
-    //lhost.slot = SDSPI_DEFAULT_HOST;
-    wl_ctx.host.slot = SDCARD_HOST;
-    memcpy(&wl_ctx.host, &lhost, sizeof(sdmmc_host_t));
-    // host.max_freq_khz = SDMMC_FREQ_DEFAULT;
+    // wl_ctx.host.max_freq_khz = SDMMC_FREQ_DEFAULT;
+#if CONFIG_SD_MMC_SPEED_HS
+    wl_ctx.host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
+#elif CONFIG_SD_MMC_SPEED_UHS_I_SDR50
+    wl_ctx.host.max_freq_khz = SDMMC_FREQ_SDR50;
+    wl_ctx.host.flags &= ~SDMMC_HOST_FLAG_DDR;
+#elif CONFIG_SD_MMC_SPEED_UHS_I_DDR50
+    wl_ctx.host.max_freq_khz = SDMMC_FREQ_DDR50;
+#elif CONFIG_SD_MMC_SPEED_PROBING
+    wl_ctx.host.max_freq_khz = SDMMC_FREQ_PROBING;
+#endif
+#if CONFIG_SD_PWR_CTRL_LDO_INTERNAL_IO
+    sd_pwr_ctrl_ldo_config_t ldo_config = {
+        .ldo_chan_id = CONFIG_SD_PWR_CTRL_LDO_IO_ID,
+    };
+    sd_pwr_ctrl_handle_t pwr_ctrl_handle = NULL;
 
+    ret = sd_pwr_ctrl_new_on_chip_ldo(&ldo_config, &pwr_ctrl_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create a new on-chip LDO power control driver");
+        return ret;
+    }
+    host.pwr_ctrl_handle = pwr_ctrl_handle;
+#endif
+
+#if defined(CONFIG_SD_USE_SPI)
+
+    ILOG(TAG, "[%s] Using SDSPI peripheral", __func__);
+#if (CONFIG_SD_PIN_CLK >= 0)
+        gpio_set_pull_mode(CONFIG_SD_PIN_CLK, GPIO_PULLUP_ONLY);
+#endif
+#if (CONFIG_SD_PIN_CS >= 0)
+        gpio_set_pull_mode(CONFIG_SD_PIN_CS, GPIO_PULLUP_ONLY);
+#endif
+#if (CONFIG_SD_PIN_MISO >= 0)
+        gpio_set_pull_mode(CONFIG_SD_PIN_MISO, GPIO_PULLUP_ONLY);
+#endif
+#if (CONFIG_SD_PIN_MOSI >= 0)
+        gpio_set_pull_mode(CONFIG_SD_PIN_MOSI, GPIO_PULLUP_ONLY);
+#endif
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = CONFIG_SD_PIN_MOSI,
         .miso_io_num = CONFIG_SD_PIN_MISO,
         .sclk_io_num = CONFIG_SD_PIN_CLK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 2000,
+        .quadwp_io_num = GPIO_NUM_NC,
+        .quadhd_io_num = GPIO_NUM_NC,
+        .max_transfer_sz = 4000,
     };
     memcpy(&wl_ctx.bus_cfg, &bus_cfg, sizeof(spi_bus_config_t));
-
+    ILOG(TAG, "[%s] Initializing sdspi device at slot: %d", __func__, wl_ctx.host.slot);
     ret = spi_bus_initialize(wl_ctx.host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "[%s] Failed to initialize bus (%s),", __func__, esp_err_to_name(ret));
-        // return ret;
+        ESP_LOGE(TAG, "[%s] Failed to initialize sdspi device (%s).", __func__, esp_err_to_name(ret));
         goto done;
     }
     // This initializes the slot without card detect (CD) and write protect (WP)
-    // signals. Modify slot_config->gpio_cd and slot_config->gpio_wp if your
+    // signals. Modify device_config->gpio_cd and device_config->gpio_wp if your
     // board has these signals.
-    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_config.gpio_cs = CONFIG_SD_PIN_CS;
-    slot_config.host_id = wl_ctx.host.slot;
-    memcpy(&wl_ctx.slot_config, &slot_config, sizeof(sdspi_device_config_t));
-    esp_event_post(LOGGER_EVENT, LOGGER_EVENT_SDCARD_INIT_DONE, 0, 0, portMAX_DELAY);
+    sdspi_device_config_t device_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+    device_config.gpio_cs = CONFIG_SD_PIN_CS;
+    device_config.host_id = wl_ctx.host.slot;
+    memcpy(&wl_ctx.device_config, &device_config, sizeof(sdspi_device_config_t));
+
+#else
+
+    ILOG(TAG, "[%s] Using SMMMC peripheral", __func__);
+
+    sdmmc_slot_config_t device_config = SDMMC_SLOT_CONFIG_DEFAULT();
+#if _IS_UHS1
+    device_config.flags |= SDMMC_SLOT_FLAG_UHS1;
+#endif
+    // Set bus width to use:
+#ifdef CONFIG_SD_SD_MMC_BUS_WIDTH_4
+    device_config.width = 4;
+#else
+    device_config.width = 1;
+#endif
+
+    // On chips where the GPIOs used for SD card can be configured, set them in
+    // the device_config structure:
+// #ifdef CONFIG_SOC_SDMMC_USE_GPIO_MATRIX
+    device_config.clk = CONFIG_SD_PIN_CLK;
+    device_config.cmd = CONFIG_SD_PIN_CMD;
+    device_config.d0 = CONFIG_SD_PIN_D0;
+#ifdef CONFIG_SD_MMC_BUS_WIDTH_4
+    device_config.d1 = CONFIG_SD_PIN_D1;
+    device_config.d2 = CONFIG_SD_PIN_D2;
+    device_config.d3 = CONFIG_SD_PIN_D3;
+#endif  // CONFIG_SD_SD_MMC_BUS_WIDTH_4
+// #endif  // CONFIG_SOC_SDMMC_USE_GPIO_MATRIX
+    memcpy(&wl_ctx.device_config, &device_config, sizeof(sdmmc_slot_config_t));
+
+#endif
+
+    esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_INIT_DONE, 0, 0, portMAX_DELAY);
+    ILOG(TAG, "[%s] done", __func__);
+#if defined(CONFIG_SD_USE_SPI)
     done:
+#endif
     return ret;
 }
 
@@ -209,25 +314,32 @@ int sdcard_mount(void) {
     // FATFS out_fs;
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = false,
-        .max_files = 8,
+        .max_files = 5,
         .allocation_unit_size = CONFIG_WL_SECTOR_SIZE,
         .disk_status_check_enable = false};
-    ret = esp_vfs_fat_sdspi_mount(wl_ctx.mount_point, &wl_ctx.host, &wl_ctx.slot_config, &mount_config, &wl_ctx.volume_handle);
-    
+    ILOG(TAG, "[%s] Mounting FAT filesystem at %s", __func__, wl_ctx.mount_point);
+
+#if defined(CONFIG_SD_USE_SPI)
+    ret = esp_vfs_fat_sdspi_mount(wl_ctx.mount_point, &wl_ctx.host, &wl_ctx.device_config, &mount_config, &wl_ctx.volume_handle);
+#else
+    ret = esp_vfs_fat_sdmmc_mount(wl_ctx.mount_point, &wl_ctx.host, &wl_ctx.device_config, &mount_config, &wl_ctx.volume_handle);
+#endif
+
     delay_ms(50);
 
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
-            ESP_LOGE(TAG, "Failed to mount filesystem. "
-                          "If you want the card to be formatted, set the "
-                          "EXAMPLE_FORMAT_IF_MOUNT_FAILED menuconfig option.");
-        } else {
+            ESP_LOGE(TAG, "Failed to mount filesystem.");
+         } else {
             ESP_LOGE(TAG,
                      "Failed to initialize the card (%s). "
                      "Make sure SD card lines have pull-up resistors in place.",
                      esp_err_to_name(ret));
+#ifdef CONFIG_DEBUG_PIN_CONNECTIONS
+            check_sd_card_pins(&config, pin_count);
+#endif
         }
-        esp_event_post(LOGGER_EVENT, LOGGER_EVENT_SDCARD_MOUNT_FAILED, 0, 0, portMAX_DELAY);
+        // esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_MOUNT_FAILED, 0, 0, portMAX_DELAY);
         goto done;
     }
     else {
@@ -235,7 +347,7 @@ int sdcard_mount(void) {
     }
     ILOG(TAG, "[%s] Filesystem mounted at %s", __FUNCTION__, wl_ctx.mount_point);
     if (!ret && wl_ctx.volume_handle) {
-        esp_event_post(LOGGER_EVENT, LOGGER_EVENT_SDCARD_MOUNTED, 0, 0, portMAX_DELAY);
+        // esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_MOUNTED, 0, 0, portMAX_DELAY);
         /* uint32_t f = init_host_frequency(volume_handle);
         if (f > SDMMC_FREQ_DEFAULT)
             sdspi_host_set_card_clk(host, f); */
@@ -275,7 +387,7 @@ void sdcard_umount(void) {
         ret = esp_vfs_fat_sdcard_unmount(wl_ctx.mount_point, wl_ctx.volume_handle);
         if (ret == ESP_OK)
             ILOG(TAG, "[%s] Card unmounted", __func__);
-        esp_event_post(LOGGER_EVENT, LOGGER_EVENT_SDCARD_UNMOUNTED, 0, 0, portMAX_DELAY);
+        esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_UNMOUNTED, 0, 0, portMAX_DELAY);
         UNUSED_PARAMETER(ret);
     }
 }
@@ -283,11 +395,22 @@ void sdcard_umount(void) {
 void sdcard_uninit(void) {
     ILOG(TAG, "[%s]", __FUNCTION__);
     esp_err_t ret;
+#if defined(CONFIG_SD_USE_SPI)
     spi_bus_free(wl_ctx.host.slot);
-    esp_event_post(LOGGER_EVENT, LOGGER_EVENT_SDCARD_DEINIT_DONE, 0, 0, portMAX_DELAY);
+#endif
+#if CONFIG_SD_PWR_CTRL_LDO_INTERNAL_IO
+    ret = sd_pwr_ctrl_del_on_chip_ldo(pwr_ctrl_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to delete the on-chip LDO power control driver");
+        return;
+    }
+#endif
+    esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_DEINIT_DONE, 0, 0, portMAX_DELAY);
     UNUSED_PARAMETER(ret);
 }
 
 bool sdcard_is_mounted(void) {
     return wl_ctx.mounted;
 }
+
+#endif

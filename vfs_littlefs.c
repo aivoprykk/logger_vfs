@@ -1,25 +1,24 @@
+#include "vfs_private.h"
+#ifdef CONFIG_USE_LITTLEFS
 
-#include "esp_err.h"
-#include "esp_log.h"
 #include "esp_system.h"
 #include "esp_flash.h"
 
 #include "vfs_littlefs.h"
-#include "vfs_private.h"
-#include "logger_events.h"
 
-#ifdef CONFIG_USE_LITTLEFS
 #include "esp_littlefs.h"
 #include "esp_idf_version.h"
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 #include "esp_chip_info.h"
 #include "spi_flash_mmap.h"
 #endif
+
 typedef struct wl_context_s {
     uint8_t mounted;
     const char *mount_point;
     const char *base_label;
 } wl_context_t;
+
 # define WL_CONTEXT_INIT {0, CONFIG_LITTLEFS_MOUNT_POINT, CONFIG_LITTLEFS_PARTITION_LABEL}
 
 static struct wl_context_s wl_ctx = WL_CONTEXT_INIT;

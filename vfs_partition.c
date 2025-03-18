@@ -1,8 +1,7 @@
-#include "inttypes.h"
-#include "esp_log.h"
-#include "esp_partition.h"
 #include "vfs_private.h"
-// #include "logger_common.h"
+#ifdef CONFIG_LOGGER_VFS_ENABLED
+#include "inttypes.h"
+#include "esp_partition.h"
 
 static const char *TAG = "vfs.partition";
 
@@ -83,3 +82,5 @@ int has_littlefs_partition()
     return 0;
     #endif
 }
+
+#endif // CONFIG_LOGGER_VFS_ENABLED

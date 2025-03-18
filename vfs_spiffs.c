@@ -1,15 +1,10 @@
+#include "vfs_private.h"
+#ifdef CONFIG_USE_SPIFFS
 
-
-#include <errno.h>
-
-#include "esp_log.h"
+#include "esp_spiffs.h"
 
 #include "vfs_spiffs.h"
-#include "vfs_private.h"
-#include "logger_events.h"
 
-#ifdef CONFIG_USE_SPIFFS
-#include "esp_spiffs.h"
 static const char *TAG = "vfs_spiffs";
 typedef struct wl_context_s {
     uint8_t mounted;
