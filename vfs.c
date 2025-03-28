@@ -46,6 +46,7 @@ static void sd_mount_cb(void* arg) {
             while(i<VFS_MAX_PARTS) {
                 if(vfs_ctx.parts[i].part_type == VFS_PART_SDCARD) {
                     vfs_ctx.parts[i].is_mounted = 1;
+                    vfs_select_part(0);
                     break;
                 }
                 ++i;
@@ -88,7 +89,7 @@ int vfs_get_part_index(const char * mount_point) {
     return -1;
 }
 
-int vfs_select_part(void) {
+int vfs_select_part(uint8_t log_part_loked) {
     ILOG(TAG, "[%s]", __func__);
     uint8_t i = 0;
     uint64_t free_size = 0;
@@ -103,43 +104,55 @@ int vfs_select_part(void) {
         }
         if(vfs_ctx.parts[i].is_mounted) {
             vfs_fs_space(vfs_ctx.parts[i].mount_point, vfs_ctx.parts[i].part_type, &vfs_ctx.parts[i].total_bytes, &vfs_ctx.parts[i].free_bytes, &vfs_ctx.parts[i].used_bytes);
+#if (C_LOG_LEVEL < 3)
             ILOG(TAG, "[%s] part: %hhu, mountpoint: %s", __func__, i, vfs_ctx.parts[i].mount_point);
+#endif
             if(vfs_ctx.config_part == VFS_PART_MAX) {
+#if (C_LOG_LEVEL < 3)
                 ILOG(TAG, "[%s] Config part: %hhu, mountpoint: %s", __func__, i, vfs_ctx.parts[i].mount_point);
+#endif
                 vfs_ctx.config_part = i;
             }
-            if((vfs_ctx.gps_log_part == VFS_PART_MAX || free_size < vfs_ctx.parts[i].free_bytes)) {
-                free_size = vfs_ctx.parts[i].free_bytes;
-                if(vfs_ctx.parts[i].free_bytes > 9000000) { // 10MB
-                    ILOG(TAG, "[%s] GPS log part: %hhu", __func__, i);
+            // if((vfs_ctx.gps_log_part == VFS_PART_MAX || free_size < vfs_ctx.parts[i].free_bytes)) {
+                // free_size = vfs_ctx.parts[i].free_bytes;
+                if(vfs_ctx.gps_log_part == VFS_PART_MAX || (!log_part_loked && vfs_ctx.parts[vfs_ctx.gps_log_part].free_bytes < vfs_ctx.parts[i].free_bytes)) {
+                // if(vfs_ctx.parts[i].free_bytes > 9000000) { // 10MB
+#if (C_LOG_LEVEL < 3)
+                    ILOG(TAG, "[%s] GPS log part: %hhu, mountpoint: %s", __func__, i, vfs_ctx.parts[i].mount_point);
+#endif
                     vfs_ctx.gps_log_part = i;
                 }
-            }
-            if(vfs_ctx.web_part == VFS_PART_MAX) {
-                strbf_puts(&pathbuf, vfs_ctx.parts[i].mount_point);
-                strbf_put_path(&pathbuf, "/www");
-                strbf_finish(&pathbuf);
-                statok = stat(pathbuf.start, &sb);
-                ILOG(TAG, "[%s] Try web part: %hhu, path: %s, statok: %d", __func__, i, pathbuf.start, statok);
-                if (!statok && S_ISDIR(sb.st_mode)) {
-                    ILOG(TAG, "[%s] Web part: %hhu, ", __func__, i);
-                    vfs_ctx.web_part = i;
-                }
-                strbf_shape(&pathbuf, 0);
-            }
+            //}
+            // if(vfs_ctx.web_part == VFS_PART_MAX) {
+            //     strbf_puts(&pathbuf, vfs_ctx.parts[i].mount_point);
+            //     strbf_put_path(&pathbuf, "/www");
+            //     strbf_finish(&pathbuf);
+            //     statok = stat(pathbuf.start, &sb);
+            //     ILOG(TAG, "[%s] Try web part: %hhu, path: %s, statok: %d", __func__, i, pathbuf.start, statok);
+            //     if (!statok && S_ISDIR(sb.st_mode)) {
+            //         ILOG(TAG, "[%s] Web part: %hhu, ", __func__, i);
+            //         vfs_ctx.web_part = i;
+            //     }
+            //     strbf_shape(&pathbuf, 0);
+            // }
         }
         next:
         ++i;
     }
-    assert(vfs_ctx.web_part != VFS_PART_MAX && vfs_ctx.gps_log_part != VFS_PART_MAX && vfs_ctx.config_part != VFS_PART_MAX);
+    //assert(
+        // vfs_ctx.web_part != VFS_PART_MAX && 
+    //    vfs_ctx.gps_log_part != VFS_PART_MAX && vfs_ctx.config_part != VFS_PART_MAX);
     return ESP_OK;
 }
 
 int vfs_init(void) {
     ILOG(TAG, "[%s]", __func__);
-    uint8_t i = 0, j;
+    uint8_t i = 0, j, k = 0;
+#if defined(LOG_LOCAL_LEVEL)
+    esp_log_level_set(TAG, ESP_LOG_DEBUG);
+#endif
     while(i < VFS_PART_MAX) {
-        j = 0;
+        j = 0, k = 0;
         while(j < VFS_MAX_PARTS) {
             if(!vfs_ctx.parts[j].mount_point) break;
             ++j;
@@ -160,6 +173,7 @@ int vfs_init(void) {
                     vfs_ctx.parts[j].mount_point = CONFIG_FATFS_MOUNT_POINT;
                     vfs_ctx.parts[j].part_type = VFS_PART_FATTFS;
                     vfs_ctx.parts[j].is_mounted = 1;
+                    k = 1;
                 }
                 break;
 #endif
@@ -169,6 +183,7 @@ int vfs_init(void) {
                     vfs_ctx.parts[j].mount_point = CONFIG_SPIFFS_MOUNT_POINT;
                     vfs_ctx.parts[j].part_type = VFS_PART_SPIFFS;
                     vfs_ctx.parts[j].is_mounted = 1;
+                    k = 1;
                 }
                 break;
 #endif
@@ -178,11 +193,15 @@ int vfs_init(void) {
                     vfs_ctx.parts[j].mount_point = CONFIG_LITTLEFS_MOUNT_POINT;
                     vfs_ctx.parts[j].part_type = VFS_PART_LITTLEFS;
                     vfs_ctx.parts[j].is_mounted = 1;
+                    k = 1;
                 }
                 break;
 #endif
             default:
                 break;
+        }
+        if(k) {
+            vfs_select_part(0);
         }
         ++i;
     }
@@ -196,7 +215,7 @@ int vfs_init(void) {
     return ESP_OK;
 }
 
-int vfs_uninit(void) {
+int vfs_deinit(void) {
     if (esp_timer_is_active(fs_size_timer)) {
             esp_timer_stop(fs_size_timer);
             esp_timer_delete(fs_size_timer);
@@ -228,6 +247,7 @@ static const char * const strs[] = {
     "Failed to get partition information"
 };
 
+#if (C_LOG_LEVEL < 2)
 int vfs_print_space(const char *mp, uint64_t total_bytes, uint64_t free_bytes, uint64_t used_bytes) {
     double bytes[3] = {total_bytes, free_bytes, used_bytes};
     uint8_t down[3] = {0, 0, 0};
@@ -243,6 +263,7 @@ int vfs_print_space(const char *mp, uint64_t total_bytes, uint64_t free_bytes, u
         bytes[2], down_str[down[2]]);
     return ESP_OK;
 }
+#endif
 
 void vfs_update_space(void*arg) {
     ILOG(TAG, "[%s]", __func__);
@@ -276,7 +297,7 @@ int vfs_fs_space(const char * mp, uint8_t type, uint64_t *total_bytes, uint64_t 
 #else
     *free_bytes = *total_bytes - *used_bytes;
 #endif
-#if (CONFIG_LOGGER_COMMON_LOG_LEVEL < 2 || CONFIG_LOGGER_GLOBAL_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL < 2)
     vfs_print_space(mp, *total_bytes, *free_bytes, *used_bytes);
 #endif
     return ESP_OK;
@@ -299,7 +320,9 @@ off_t s_xstat_file_size(int f) {
 }
 
 int get_file_path_width_base(char *topath, size_t pathlen, const char *name, const char *base) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] %s %s", __FUNCTION__, base ? base : "", name);
+#endif
     assert(topath);
     char *p = topath;
     const char *mp = base;
@@ -338,7 +361,9 @@ int get_file_path_width_base(char *topath, size_t pathlen, const char *name, con
 }
 
 FILE *s_open_file(const char *name, const char *base, const char *mode) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] %s %s", __FUNCTION__, base ? base : "", name);
+#endif
     if (name == 0 || name[0] == 0)
         return 0;
     if (mode == 0)
@@ -349,15 +374,21 @@ FILE *s_open_file(const char *name, const char *base, const char *mode) {
     p = (*path ? path : name);
     FILE *f = fopen(p, mode);
     if (f == NULL) {
+#if (C_LOG_LEVEL < 3)
         ESP_LOGE(TAG, "[%s] open '%s' failed '%s'.", __FUNCTION__, p, strerror(errno));
+#endif
         return 0;
     }
+#if (C_LOG_LEVEL < 2)
     ILOG(TAG, "[%s] file:'%s', mode:'%s'", __FUNCTION__, p, mode);
+#endif
     return f;
 }
 
 int s_open(const char *name, const char *base, const char *mode) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] %s %s", __FUNCTION__, base ? base : "", name);
+#endif
     if (name == 0 || name[0] == 0)
         return -1;
     if (mode == 0)
@@ -381,15 +412,21 @@ int s_open(const char *name, const char *base, const char *mode) {
     p = (*path ? path : name);
     int f = open(p, m);
     if (f < 0) {
+#if (C_LOG_LEVEL < 3)
         ESP_LOGE(TAG, "[%s] open '%s' failed: '%s'", __FUNCTION__, p, strerror(errno));
+#endif
         return -1;
     }
+#if (C_LOG_LEVEL < 2)
     ILOG(TAG, "[%s] file:'%s', mode:'%s'", __FUNCTION__, p, mode);
+#endif
     return f;
 }
 
 esp_err_t s_write_file(const char *name, const char *base, char *data) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] %s %s", __FUNCTION__, base ? base : "", name);
+#endif
     if (name == 0 || name[0] == 0)
         return ESP_FAIL;
     FILE *f = s_open_file(name, base, "w");
@@ -402,7 +439,9 @@ esp_err_t s_write_file(const char *name, const char *base, char *data) {
 }
 
 esp_err_t s_write(const char *name, const char *base, char *data, size_t len) {
+#if (C_LOG_LEVEL < 2)
     ILOG(TAG, "[%s] %s %s", __FUNCTION__, base ? base : "", name);
+#endif
     if (name == 0 || name[0] == 0)
         return ESP_FAIL;
     int f = s_open(name, base, "w+");
@@ -411,19 +450,27 @@ esp_err_t s_write(const char *name, const char *base, char *data, size_t len) {
     }
     int bytes = write(f, data, len ? len : strlen(data));
     if (bytes < 0) {
-        ESP_LOGE(TAG, "Failed to write (%s) fd:%d", strerror(errno), f);
+#if (C_LOG_LEVEL < 3)
+        ELOG(TAG, "Failed to write (%s) fd:%d", strerror(errno), f);
+#endif
     }
     if (fsync(f)) {
-        ESP_LOGE(TAG, "Failed to sync (%s) fd:%d", strerror(errno), f);
+#if (C_LOG_LEVEL < 3)
+        ELOG(TAG, "Failed to sync (%s) fd:%d", strerror(errno), f);
+#endif
     }
     if (close(f)) {
-        ESP_LOGE(TAG, "Failed to close (%s) fd:%d", strerror(errno), f);
+#if (C_LOG_LEVEL < 3)
+        ELOG(TAG, "Failed to close (%s) fd:%d", strerror(errno), f);
+#endif
     }
     return bytes;
 }
 
 char *s_read_from_file(const char *name, const char *base) {
+#if (C_LOG_LEVEL < 2)
     ILOG(TAG, "[%s] %s %s", __FUNCTION__, base ? base : "", name);
+#endif
     if (name == 0 || name[0] == 0)
         return 0;
     char *buffer = 0;
@@ -433,39 +480,51 @@ char *s_read_from_file(const char *name, const char *base) {
         buffer = malloc(flength + 1 * sizeof(char));
         int err = read(f, buffer, sizeof(char) * flength);
         if (err < 0) {
-            ESP_LOGE(TAG, "Failed to read (%s) fd:%d", strerror(errno), f);
+#if (C_LOG_LEVEL < 3)
+            ELOG(TAG, "Failed to read (%s) fd:%d", strerror(errno), f);
+#endif
             free(buffer);
             buffer = 0;
         } else
             buffer[flength] = 0;
         if (close(f)) {
-            ESP_LOGE(TAG, "Failed to close (%s)", strerror(errno));
+#if (C_LOG_LEVEL < 3)
+            ELOG(TAG, "Failed to close (%s)", strerror(errno));
+#endif
         }
     }
     return buffer;
 }
 
 int s_rename_file_n(const char *old, const char *new, uint8_t rmifexists) {
+#if (C_LOG_LEVEL < 2)
     ILOG(TAG, "[%s] %s %s", __FUNCTION__, old, new);
+#endif
     if (!old || !new)
         return -1;
     if (!s_xfile_exists(old))
         return -1;
     if (s_xfile_exists(new) && rmifexists) {
         if (unlink(new) < 0) {
-            ESP_LOGE(TAG, "[%s] Failed to unlink (%s)", __FILE__, strerror(errno));
+#if (C_LOG_LEVEL < 3)
+            ELOG(TAG, "[%s] Failed to unlink (%s)", __FILE__, strerror(errno));
+#endif
             return -1;
         }
     }
     if (rename(old, new) < 0) {
-        ESP_LOGE(TAG, "[%s] Failed to rename [%s to %s], (%s)", __FILE__, old, new, strerror(errno));
+#if (C_LOG_LEVEL < 3)
+        ELOG(TAG, "[%s] Failed to rename [%s to %s], (%s)", __FILE__, old, new, strerror(errno));
+#endif
         return -1;
     }
     return 0;
 }
 
 int s_rename_file(const char *old, const char *new, const char *base) {
+#if (C_LOG_LEVEL < 2)
     ILOG(TAG, "[%s] %s %s %s", __FUNCTION__, base ? base : "", old, new);
+#endif
     if (!old || !new)
         return -1;
     char path[PATH_MAX_CHAR_SIZE] = {0};

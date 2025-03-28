@@ -19,6 +19,7 @@ static const char* get_type_str(esp_partition_type_t type)
     }
 }
 
+#if (C_LOG_LEVEL < 3)
 // Get the string name of subtype enum values used in this example
 static const char* get_subtype_str(esp_partition_subtype_t subtype)
 {
@@ -38,18 +39,23 @@ static const char* get_subtype_str(esp_partition_subtype_t subtype)
             return "UNKNOWN_PARTITION_SUBTYPE"; // subtype not used in this example
     }
 }
+#endif
 
 // Find the partition using given parameters
 static int find_partition(esp_partition_type_t type, esp_partition_subtype_t subtype, const char* name)
 {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] with type %s, subtype %s, label %s...", __func__, get_type_str(type), get_subtype_str(subtype),
                     name == NULL ? "NULL (unspecified)" : name);
+#endif
     const esp_partition_t * part  = esp_partition_find_first(type, subtype, name);
     if (part == NULL) {
         ESP_LOGE(TAG, "Partition not found");
         return 0;
     }
-    ESP_LOGI(TAG, "Partition found, address: 0x%" PRIx32 ", size: %"PRIu32, part->address, part->size);
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "Partition found, address: 0x%" PRIx32 ", size: %"PRIu32, part->address, part->size);
+#endif
     return 1;
 }
 

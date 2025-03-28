@@ -40,19 +40,19 @@ typedef struct vfs_s {
     vfs_config_t parts[VFS_MAX_PARTS];
     uint8_t config_part;
     uint8_t gps_log_part;
-    uint8_t web_part;
+    // uint8_t web_part;
 } vfs_t;
 
 #define VFS_DEDAULTS() { \
 {VFS_CFG_DEFAULT(), VFS_CFG_DEFAULT()}, \
-REP3(VFS_PART_MAX) \
+REP2(VFS_PART_MAX) \
 }
 
 extern vfs_t vfs_ctx;
 
 int vfs_init(void);
-int vfs_uninit(void);
-int vfs_select_part(void);
+int vfs_deinit(void);
+int vfs_select_part(uint8_t log_part_locked);
 int vfs_print_space(const char *mp, uint64_t total_bytes, uint64_t free_bytes, uint64_t used_bytes);
 int vfs_fs_space(const char * mp, uint8_t type, uint64_t *total_bytes, uint64_t *free_bytes, uint64_t *used_bytes);
 void vfs_update_space(void*arg);

@@ -8,6 +8,7 @@
 #include "esp_vfs_fat.h"
 
 #include "vfs_events.h"
+#include "hal/efuse_hal.h"
 
 typedef struct wl_context_s {
     uint8_t mounted;
@@ -31,13 +32,23 @@ int fatfs_init() {
 #else
     int ro = 0;
 #endif
+    if(heap_caps_get_total_size(MALLOC_CAP_8BIT) < 180000) {
+#if (C_LOG_LEVEL < 3)
+        WLOG(TAG, "[%s] Not enough mem (%u < 180000) to mount FATFS for this chip.", __func__, heap_caps_get_total_size(MALLOC_CAP_8BIT));
+#endif
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Mounting FAT filesystem to mountpoint:%s, label:%s, %d", __func__, wl_ctx.mount_point, wl_ctx.base_label, ro);
+#endif
     // To mount device we need name of device partition, define mount_point
     // and allow format partition in case if it is new one and was not formatted
     // before
     esp_err_t err = ESP_OK;
     if(has_fatfs_partition() == 0) {
-        ESP_LOGW(TAG, "[%s] FATFS partition not found", __func__);
+#if (C_LOG_LEVEL < 3)
+        WLOG(TAG, "[%s] FATFS partition not found", __func__);
+#endif
         goto end;
     }
     const esp_vfs_fat_mount_config_t mount_config = {
@@ -51,7 +62,9 @@ int fatfs_init() {
     err = esp_vfs_fat_spiflash_mount_rw_wl(wl_ctx.mount_point, wl_ctx.base_label, &mount_config, &wl_ctx.volume_handle);
 #endif
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "[%s] Failed to mount FATFS (%s)", __func__, esp_err_to_name(err));
+#if (C_LOG_LEVEL < 3)
+        WLOG(TAG, "[%s] Failed to mount FATFS (%s)", __func__, esp_err_to_name(err));
+#endif
         esp_event_post(VFS_EVENT, VFS_EVENT_FAT_PARTITION_MOUNT_FAILED, 0, 0, portMAX_DELAY);
         goto end;
     } else {
@@ -74,7 +87,9 @@ int fatfs_uninit() {
 #else
     esp_vfs_fat_spiflash_unmount_rw_wl(wl_ctx.mount_point, wl_ctx.volume_handle);
 #endif
+#if C_LOG_LEVEL < 3
     ILOG(TAG, "[%s] Filesystem unmounted", __func__);
+#endif
     wl_ctx.mounted = 0;
     esp_event_post(VFS_EVENT, VFS_EVENT_FAT_PARTITION_UNMOUNTED, 0, 0, portMAX_DELAY);
     return 0;

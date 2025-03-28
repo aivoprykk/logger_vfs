@@ -12,7 +12,7 @@
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #ifdef CONFIG_DEBUG_PIN_CONNECTIONS
-#include "sd_test_io.h"
+#include "test_io.h"
 #endif
 
 #include "vfs_fat_sdspi.h"
@@ -139,10 +139,11 @@ static uint32_t init_host_frequency() {
 
 #ifdef CONFIG_DEBUG_PIN_CONNECTIONS
 #if defined(CONFIG_SD_USE_SPI)
-const char* names[] = {"CLK ", "MOSI", "MISO", "CS  "};
+const char* names[] = {"CLK ", "MOSI", "MISO", "CS"};
 #else
 const char* names[] = {"CLK", "CMD", "D0", "D1", "D2", "D3"};
 #endif
+
 const int pins[] = {
 #if defined(CONFIG_SD_USE_SPI)
     CONFIG_SD_PIN_CLK,
@@ -181,13 +182,48 @@ const int adc_channels[] = {
     #endif
 #endif
 };
+const int adc_units[] = {
+#if defined(CONFIG_SD_USE_SPI)
+    CONFIG_SD_ADC_PIN_CLK,
+    CONFIG_SD_ADC_PIN_MOSI,
+    CONFIG_SD_ADC_PIN_MISO,
+    CONFIG_SD_ADC_PIN_CS
+#else
+    CONFIG_SD_ADC_PIN_CLK,
+    CONFIG_SD_ADC_PIN_CMD,
+    CONFIG_SD_ADC_PIN_D0
+    #ifdef CONFIG_SD_MMC_BUS_WIDTH_4
+    ,CONFIG_SD_ADC_PIN_D1,
+    CONFIG_SD_ADC_PIN_D2,
+    CONFIG_SD_ADC_PIN_D3
+    #endif
+#endif
+};
 #endif //CONFIG_ENABLE_ADC_FEATURE
-
-pin_configuration_t config = {
+const int modes[] = {
+#if defined(CONFIG_SD_USE_SPI)
+    GPIO_MODE_INPUT,
+    GPIO_MODE_INPUT,
+    GPIO_MODE_INPUT,
+    GPIO_MODE_INPUT
+#else
+    GPIO_MODE_INPUT,
+    GPIO_MODE_INPUT,
+    GPIO_MODE_INPUT
+    #ifdef CONFIG_SD_MMC_BUS_WIDTH_4
+    ,GPIO_MODE_INPUT,
+    GPIO_MODE_INPUT,
+    GPIO_MODE_INPUT
+    #endif
+#endif
+};
+pin_configuration_t pin_test_config = {
     .names = names,
     .pins = pins,
+    .modes = modes,
 #if CONFIG_ENABLE_ADC_FEATURE
     .adc_channels = adc_channels,
+    .adc_units = adc_units,
 #endif
 };
 #endif //CONFIG_DEBUG_PIN_CONNECTIONS
@@ -255,7 +291,7 @@ int sdcard_init(void) {
     ILOG(TAG, "[%s] Initializing sdspi device at slot: %d", __func__, wl_ctx.host.slot);
     ret = spi_bus_initialize(wl_ctx.host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "[%s] Failed to initialize sdspi device (%s).", __func__, esp_err_to_name(ret));
+        ELOG(TAG, "[%s] Failed to initialize sdspi device (%s).", __func__, esp_err_to_name(ret));
         goto done;
     }
     // This initializes the slot without card detect (CD) and write protect (WP)
@@ -317,8 +353,9 @@ int sdcard_mount(void) {
         .max_files = 5,
         .allocation_unit_size = CONFIG_WL_SECTOR_SIZE,
         .disk_status_check_enable = false};
-    ILOG(TAG, "[%s] Mounting FAT filesystem at %s", __func__, wl_ctx.mount_point);
-
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "[%s] Mounting SD FAT filesystem at %s", __func__, wl_ctx.mount_point);
+#endif
 #if defined(CONFIG_SD_USE_SPI)
     ret = esp_vfs_fat_sdspi_mount(wl_ctx.mount_point, &wl_ctx.host, &wl_ctx.device_config, &mount_config, &wl_ctx.volume_handle);
 #else
@@ -331,12 +368,12 @@ int sdcard_mount(void) {
         if (ret == ESP_FAIL) {
             ESP_LOGE(TAG, "Failed to mount filesystem.");
          } else {
-            ESP_LOGE(TAG,
+            ELOG(TAG,
                      "Failed to initialize the card (%s). "
                      "Make sure SD card lines have pull-up resistors in place.",
                      esp_err_to_name(ret));
 #ifdef CONFIG_DEBUG_PIN_CONNECTIONS
-            check_sd_card_pins(&config, pin_count);
+            check_pins(&pin_test_config, pin_count);
 #endif
         }
         // esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_MOUNT_FAILED, 0, 0, portMAX_DELAY);
@@ -345,7 +382,9 @@ int sdcard_mount(void) {
     else {
         wl_ctx.mounted = 1;
     }
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Filesystem mounted at %s", __FUNCTION__, wl_ctx.mount_point);
+#endif
     if (!ret && wl_ctx.volume_handle) {
         // esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_MOUNTED, 0, 0, portMAX_DELAY);
         /* uint32_t f = init_host_frequency(volume_handle);
@@ -385,8 +424,10 @@ void sdcard_umount(void) {
         }
         esp_err_t ret;
         ret = esp_vfs_fat_sdcard_unmount(wl_ctx.mount_point, wl_ctx.volume_handle);
+#if (C_LOG_LEVEL < 3)
         if (ret == ESP_OK)
             ILOG(TAG, "[%s] Card unmounted", __func__);
+#endif
         esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_UNMOUNTED, 0, 0, portMAX_DELAY);
         UNUSED_PARAMETER(ret);
     }

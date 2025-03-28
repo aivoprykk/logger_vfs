@@ -144,34 +144,46 @@ menu "Logger Storage Module Configuration"
                 depends on DEBUG_PIN_CONNECTIONS
                 default y if IDF_TARGET_ESP32
                 default n
-        
-            config VFS_ADC_UNIT
-                int "ADC Unit"
-                depends on DEBUG_PIN_CONNECTIONS && ENABLE_ADC_FEATURE
-                default 1 if IDF_TARGET_ESP32
-                default 0 if IDF_TARGET_ESP32S3
-                default 1
             if ENABLE_ADC_FEATURE
+                config SD_ADC_UNIT_PIN_CLK
+                    int "ADC Unit for CLK"
+                    default 2 if IDF_TARGET_ESP32S3
+                    default 1
                 config SD_ADC_PIN_CLK
                     int "SCLK (SCK) mapped ADC pin"
                     default 6 if IDF_TARGET_ESP32
-                    default 0 if IDF_TARGET_ESP32S3
+                    default 1 if IDF_TARGET_ESP32S3
                     default 1
                 if SD_USE_SPI
+                    config SD_ADC_UNIT_PIN_MOSI
+                        int "ADC Unit for MOSI"
+                        default 2 if HAS_BOARD_LILYGO_EPAPER_T5
+                        default 2 if IDF_TARGET_ESP32S3
+                        default 1
                     config SD_ADC_PIN_MOSI
                         int "M0S1 (CMD) mapped ADC pin"
-                        default 3 if IDF_TARGET_ESP32
-                        default 7 if IDF_TARGET_ESP32S3
+                        default 3 if HAS_BOARD_LILYGO_EPAPER_T5
+                        default 0 if IDF_TARGET_ESP32S3
+                        default 3
+                    config SD_ADC_UNIT_PIN_MISO
+                        int "ADC Unit for MISO"
+                        default 2 if HAS_BOARD_LILYGO_EPAPER_T5
+                        default 2 if IDF_TARGET_ESP32S3
                         default 1
                     config SD_ADC_PIN_MISO
                         int "MISO (SD0) mapped ADC pin"
-                        default 2 if IDF_TARGET_ESP32
+                        default 2 if HAS_BOARD_LILYGO_EPAPER_T5
+                        default 2 if IDF_TARGET_ESP32S3
+                        default 1
+                    config SD_ADC_UNIT_PIN_CS
+                        int "ADC Unit for CS"
+                        default 2 if HAS_BOARD_LILYGO_EPAPER_T5
                         default 1 if IDF_TARGET_ESP32S3
                         default 1
                     config SD_ADC_PIN_CS
                         int "CS (SD3) mapped ADC pin"
-                        default 4 if IDF_TARGET_ESP32
-                        default 6 if IDF_TARGET_ESP32S3
+                        default 4 if HAS_BOARD_LILYGO_EPAPER_T5
+                        default 9 if IDF_TARGET_ESP32S3
                         default 1
                 endif
                 if SD_USE_SDMMC
@@ -224,8 +236,7 @@ menu "Logger Storage Module Configuration"
         endif
         config USE_FATFS
             bool "Use FatFS System Flash Partition"
-            default y if IDF_TARGET_ESP32S3
-            default n
+            default y
             help
                 Use System Flash Partition for fatfs
         if USE_FATFS
