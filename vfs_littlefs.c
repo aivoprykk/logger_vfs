@@ -32,7 +32,7 @@ int littlefs_init() {
     /* Print chip information */
     esp_chip_info_t chip_info;
     esp_chip_info(&chip_info);
-#if CONFIG_LOGGER_VFS_LOG_LEVEL < 2
+#if (C_LOG_LEVEL < 2)
     printf("This is %s chip with %d CPU cores, WiFi%s%s, ",
             CONFIG_IDF_TARGET,
             chip_info.cores,

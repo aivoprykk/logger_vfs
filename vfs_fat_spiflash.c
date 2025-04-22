@@ -33,7 +33,7 @@ int fatfs_init() {
     int ro = 0;
 #endif
     if(heap_caps_get_total_size(MALLOC_CAP_8BIT) < 180000) {
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL < 4)
         WLOG(TAG, "[%s] Not enough mem (%u < 180000) to mount FATFS for this chip.", __func__, heap_caps_get_total_size(MALLOC_CAP_8BIT));
 #endif
         return ESP_ERR_NOT_SUPPORTED;

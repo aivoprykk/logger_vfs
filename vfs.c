@@ -60,8 +60,11 @@ static void sd_mount_cb(void* arg) {
                 .name = "sd_mount",
                 .arg = 0
             };
-            ESP_ERROR_CHECK(esp_timer_create(&sd_timer_args, &sd_timer));
-            ESP_ERROR_CHECK(esp_timer_start_periodic(sd_timer, 1000000)); // 500ms
+            if(!esp_timer_create(&sd_timer_args, &sd_timer))
+                esp_timer_start_periodic(sd_timer, SEC_TO_US(5)); // 500ms
+            else {
+                ELOG(TAG, "[%s] Failed to create sd timer", __func__);
+            }
         }
     }
     else if (esp_timer_is_active(sd_timer)) {
@@ -210,8 +213,11 @@ int vfs_init(void) {
         .name = "fs_size",
         .arg = 0
     };
-    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &fs_size_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(fs_size_timer, 60000000)); // 60s
+    if(!esp_timer_create(&timer_args, &fs_size_timer))
+        esp_timer_start_periodic(fs_size_timer, SEC_TO_US(60)); // 60s
+    else {
+        ELOG(TAG, "[%s] Failed to create fs size timer", __func__);
+    }
     return ESP_OK;
 }
 
