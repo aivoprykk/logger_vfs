@@ -6,9 +6,13 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include <stdbool.h>
 
 int spiffs_init(void);
-int spiffs_uninit();
+int spiffs_mount(void);
+void spiffs_umount(void);
+void spiffs_uninit();
+bool spiffs_is_mounted(void);
 
 #ifdef __cplusplus
 }

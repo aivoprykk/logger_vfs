@@ -4,9 +4,12 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
+#include <stdbool.h>
 int littlefs_init();
-int littlefs_deinit();
+int littlefs_mount();
+void littlefs_unmount();
+void littlefs_uninit();
+bool littlefs_is_mounted();
 
 #ifdef __cplusplus
 }

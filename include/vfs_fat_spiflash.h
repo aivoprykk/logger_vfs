@@ -9,7 +9,9 @@ extern "C" {
 #include <stdbool.h>
 
 int fatfs_init();
-int fatfs_uninit();
+int fatfs_mount();
+void fatfs_umount();
+void fatfs_uninit();
 bool fatfs_is_mounted(void);
 
 #ifdef __cplusplus

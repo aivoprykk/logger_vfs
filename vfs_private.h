@@ -19,11 +19,18 @@ extern "C" {
 #endif
 #include "common_log.h"
 
+enum vfs_data_e {
+  VFS_MIN_MEM_SIZE_FOR_FLASH_MOUNT = 180000,
+};
+
+#define PATH_MAX_CHAR_SIZE 64
 off_t s_xstat_file_size(int f);
 int get_file_path_width_base(char *topath, size_t pathlen, const char *name, const char *base);
 int has_fatfs_partition();
 int has_spiffs_partition();
 int has_littlefs_partition();
+int write_speed(const char *name, const char * mount_point);
+int s_remove_file(const char *name, const char *base);
 
 #ifdef __cplusplus
 }

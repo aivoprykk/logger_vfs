@@ -14,7 +14,7 @@ extern "C" {
 #define VFS_MAX_PARTS 2
 #define VFS_CFG_ENUM_PRE(l) VFS_PART_##l
 #define VFS_CFG_ENUM_PRE_N(l)  VFS_CFG_ENUM_PRE(l),
-#define VFS_CFG_PART_LIST(l) l(FATTFS) l(SPIFFS) l(LITTLEFS) l(SDCARD)
+#define VFS_CFG_PART_LIST(l) l(FATFS) l(SPIFFS) l(LITTLEFS) l(SDCARD)
 typedef enum {
     VFS_CFG_PART_LIST(VFS_CFG_ENUM_PRE_N)
     VFS_PART_MAX
@@ -26,6 +26,7 @@ typedef struct vfs_config_s {
     uint64_t free_bytes;
     uint64_t used_bytes;
     uint8_t is_mounted;
+    uint8_t write_attempts;
     vfs_part_t part_type;
 } vfs_config_t;
 
@@ -65,6 +66,7 @@ int s_write(const char *name, const char * base, char *data, size_t len);
 FILE *s_open_file(const char *name, const char * base, const char *mode);
 int s_rename_file(const char *old, const char * n, const char * base);
 int s_rename_file_n(const char *old, const char *n, uint8_t rmifexists);
+int vfs_space_str(char*arg, size_t arglen);
 #ifdef __cplusplus
 }
 #endif

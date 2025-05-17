@@ -15,8 +15,15 @@ typedef struct wl_context_s {
 static struct wl_context_s wl_ctx = WL_CONTEXT_INIT;
 
 int spiffs_init(void) {
-    IMEAS_START();
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
+#endif
+    return ESP_OK;
+}
+int spiffs_mount(void) {
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "[%s]", __func__);
+#endif
     if(has_spiffs_partition() == 0) {
         ESP_LOGW(TAG, "[%s] SPIFFS partition not found", __func__);
         goto done;
@@ -38,25 +45,28 @@ int spiffs_init(void) {
         goto done;
     }
     wl_ctx.mounted = 1;
-    size_t total = 0, used = 0;
-    ret = esp_spiffs_info(NULL, &total, &used);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get SPIFFS partition information (%s)", esp_err_to_name(ret));
-    } else {
-        ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
-    }
     done:
-    IMEAS_END(TAG,"[%s] took %llu us", __func__);
-    return ESP_OK;
+    return ret;
 }
 
-int spiffs_uninit() {
+void spiffs_uninit() {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
-    if(wl_ctx.mounted == 0) {
-        return 0;
-    }
-    esp_vfs_spiffs_unregister(NULL);
-    wl_ctx.mounted = 0;
-    return 0;
+#endif
 }
+
+void spiffs_umount() {
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "[%s]", __func__);
+#endif
+    if(!wl_ctx.mounted) {
+        esp_vfs_spiffs_unregister(NULL);
+        wl_ctx.mounted = 0;
+    }
+}
+
+bool spiffs_is_mounted() {
+    return wl_ctx.mounted;
+}
+
 #endif

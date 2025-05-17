@@ -26,9 +26,9 @@ static struct wl_context_s wl_ctx = WL_CONTEXT_INIT;
 static const char *TAG = "vfs_littlefs";
 
 int littlefs_init() {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
-    IMEAS_START();
-
+#endif
     /* Print chip information */
     esp_chip_info_t chip_info;
     esp_chip_info(&chip_info);
@@ -45,12 +45,18 @@ int littlefs_init() {
     uint32_t size_flash_chip = 0;
     esp_flash_get_size(NULL, &size_flash_chip);
     printf("%uMB %s flash\n", (unsigned int)size_flash_chip >> 20, (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
+    return ESP_OK;
+}
+
+int littlefs_mount() {
     esp_err_t ret = ESP_OK;
     if(has_littlefs_partition() == 0) {
         ESP_LOGW(TAG, "[%s] LittleFS partition not found", __func__);
         goto done;
     }
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Initializing LittleFS", __func__);
+#endif
     esp_vfs_littlefs_conf_t conf = {
             .base_path = wl_ctx.mount_point,
             .partition_label = wl_ctx.base_label,
@@ -79,29 +85,25 @@ int littlefs_init() {
             goto done;
     }
     wl_ctx.mounted = 1;
-
-    size_t total = 0, used = 0;
-    ret = esp_littlefs_info(conf.partition_label, &total, &used);
-    if (ret != ESP_OK)
-    {
-            ESP_LOGE(TAG, "Failed to get LittleFS partition information (%s)", esp_err_to_name(ret));
-    }
-    else
-    {
-            ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
-    }
     done:
-    IMEAS_END(TAG, "[%s] took %llu us", __func__);
     return ret;
 }
 
-int littlefs_deinit() {
+void littlefs_uninit() {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
-    if(wl_ctx.mounted == 0)
-        return 0;
-    esp_err_t ret = esp_vfs_littlefs_unregister(wl_ctx.base_label);
-    wl_ctx.mounted = 0;
-    return ret;
+#endif
+}
+
+void littlefs_umount() {
+    if(!wl_ctx.mounted) {
+        esp_vfs_littlefs_unregister(wl_ctx.base_label);
+        wl_ctx.mounted = 0;
+    }
+}
+
+bool littlefs_is_mounted() {
+    return wl_ctx.mounted;
 }
 
 #endif

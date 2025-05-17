@@ -1,3 +1,4 @@
+#include "numstr.h"
 #include "vfs_private.h"
 #if defined(CONFIG_LOGGER_VFS_ENABLED)
 
@@ -37,43 +38,238 @@ static const char *TAG = "vfs";
 static esp_timer_handle_t sd_timer = 0;
 static esp_timer_handle_t fs_size_timer = 0;
 vfs_t vfs_ctx = VFS_DEDAULTS();
+static int do_space_print = 0;
 
-static void sd_mount_cb(void* arg) {
-    ILOG(TAG, "[%s]", __func__);
-    if(!sdcard_is_mounted()) {
-        if(sdcard_mount()==ESP_OK) {
-            uint8_t i = 0;
-            while(i<VFS_MAX_PARTS) {
-                if(vfs_ctx.parts[i].part_type == VFS_PART_SDCARD) {
-                    vfs_ctx.parts[i].is_mounted = 1;
-                    vfs_select_part(0);
-                    break;
-                }
-                ++i;
-            }
-            esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_MOUNTED, NULL, 0, portMAX_DELAY);
+static esp_err_t try_open_write(const char *name, const char * mount_point, void (*cb)(void*), void *arg) {
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "[%s]", __FUNCTION__);
+#endif
+    if (name == 0 || *name == 0)
+        return ESP_FAIL;
+    int attempts = 2;
+    FILE *f = 0;
+    try_again:
+    f = s_open_file(name, mount_point, "w");
+    if (f == NULL) {
+        WLOG(TAG, "[%s] Failed to open open file in %s.", __func__, mount_point);
+        if(attempts-- > 0) {
+            s_remove_file(name, mount_point);
+            goto try_again;
         }
-        else if (!esp_timer_is_active(sd_timer)) {
-            esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_MOUNT_FAILED, NULL, 0, portMAX_DELAY);
-            const esp_timer_create_args_t sd_timer_args = {
-                .callback = &sd_mount_cb,
-                .name = "sd_mount",
-                .arg = 0
-            };
-            if(!esp_timer_create(&sd_timer_args, &sd_timer))
-                esp_timer_start_periodic(sd_timer, SEC_TO_US(5)); // 500ms
-            else {
-                ELOG(TAG, "[%s] Failed to create sd timer", __func__);
-            }
+        return ESP_FAIL;
+    }
+    if(cb) cb(arg);
+    fclose(f);
+    return ESP_OK;
+}
+
+#ifdef CONFIG_SD_DEBUG_STATS
+#define TIME_ARRAY_SIZE 500
+#define PRINT_DIFF 0
+#define WRITE_BUFFER_SIZE (16 * 1024)
+
+esp_err_t write_speed(const char *name, const char * mount_point) {
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "[%s]", __FUNCTION__);
+#endif
+    if (name == 0 || *name == 0)
+        return ESP_FAIL;
+    // ILOG(TAG, "[%s] file:%s", __FUNCTION__, name);
+    FILE *f = s_open_file(name, mount_point, "w");
+    if (f == NULL) {
+        ESP_LOGE(TAG, "Failed to open file for writing");
+        return ESP_FAIL;
+    }
+    uint64_t time_array[TIME_ARRAY_SIZE];
+    char write_buffer[WRITE_BUFFER_SIZE];
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "[%s] Init write buffer ", __FUNCTION__);
+#endif
+    // initialize write buffer
+    for (int i = 0; i < WRITE_BUFFER_SIZE; i++) {
+        write_buffer[i] = ' ' + (i % 64);
+    }
+
+    // ILOG(TAG, "[%s] Write to file ", __FUNCTION__);
+    uint64_t start = esp_timer_get_time();
+    for (int counter = 0; counter < TIME_ARRAY_SIZE; counter++) {
+        fwrite(write_buffer, 1, WRITE_BUFFER_SIZE, f);
+        time_array[counter] = esp_timer_get_time();
+    }
+    fclose(f);
+    // ILOG(TAG, "[%s] File written ", __FUNCTION__);
+
+    uint64_t sum = 0;
+    uint64_t maximum = 0;
+    uint64_t minimum = UINT64_MAX;
+    for (int i = 0; i < TIME_ARRAY_SIZE; i++) {
+        uint64_t end = time_array[i];
+        uint64_t diff = end - start;
+        maximum = (diff > maximum) ? diff : maximum;
+        minimum = (diff < minimum) ? diff : minimum;
+        sum += diff;
+        start = end;
+    }
+    uint64_t average = sum / TIME_ARRAY_SIZE;
+    ILOG(TAG, "write buffer size = %d", WRITE_BUFFER_SIZE);
+    ILOG(TAG, "sum=%llu microseconds, average=%llu microseconds", sum, average);
+    ILOG(TAG, "maximum=%llu microseconds, minimum=%llu microseconds", maximum, minimum);
+    ILOG(TAG, "highest write speed = %llu byte/s", ((uint64_t)WRITE_BUFFER_SIZE) * 1000 * 1000 / minimum);
+    ILOG(TAG, "average write speed = %llu byte/s", ((uint64_t)WRITE_BUFFER_SIZE) * 1000 * 1000 / average);
+    ILOG(TAG, "lowest write speed = %llu byte/s", ((uint64_t)WRITE_BUFFER_SIZE) * 1000 * 1000 / maximum);
+    return ESP_OK;
+}
+#endif
+
+static esp_err_t m_mount_x(vfs_config_t *p) {
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "[%s]", __func__);
+#endif
+    int8_t j = 0, ret = 0;
+    bool (*mounted)(void) = 0;
+    int (*mount)(void) = 0, msg_mounted = 0, msg_mount_failed = 0, msg_write_failed = 0;
+    void (*umount)(void) = 0;
+    if(!p || p->part_type >= VFS_PART_MAX || !p->mount_point) return ESP_FAIL;
+#ifdef CONFIG_USE_FATFS
+    if(p->part_type == VFS_PART_FATFS) {
+        mounted = fatfs_is_mounted;
+        mount = fatfs_mount;
+        umount = fatfs_umount;
+        msg_mounted = VFS_EVENT_FAT_PARTITION_MOUNTED;
+        msg_mount_failed = VFS_EVENT_FAT_PARTITION_MOUNT_FAILED;
+        msg_write_failed = VFS_EVENT_FAT_PARTITION_WRITE_FAILED;
+    }
+    else
+#endif
+#ifdef CONFIG_USE_LITTLEFS
+    if(p->part_type == VFS_PART_LITTLEFS) {
+        mounted = littlefs_is_mounted;
+        mount = littlefs_mount;
+        umount = littlefs_umount;
+        msg_mounted = VFS_EVENT_LITTEFS_PARTITION_MOUNTED;
+        msg_mount_failed = VFS_EVENT_LITTLEFS_PARTITION_MOUNT_FAILED;
+        msg_write_failed = VFS_EVENT_LITTLEFS_PARTITION_WRITE_FAILED;
+    }
+    else
+#endif
+#ifdef CONFIG_USE_SPIFFS
+    if(p->part_type == VFS_PART_SPIFFS) {
+        mounted = spiffs_is_mounted;
+        mount = spiffs_mount;
+        umount = spiffs_umount;
+        msg_mounted = VFS_EVENT_SPIFFS_PARTITION_MOUNTED;
+        msg_mount_failed = VFS_EVENT_SPIFFS_PARTITION_MOUNT_FAILED;
+        msg_write_failed = VFS_EVENT_SPIFFS_PARTITION_WRITE_FAILED;
+    }
+    else
+#endif
+#ifdef CONFIG_USE_SD_CARD
+    if(p->part_type == VFS_PART_SDCARD) {
+        mounted = sdcard_is_mounted;
+        mount = sdcard_mount;
+        umount = sdcard_umount;
+        msg_mounted = VFS_EVENT_SDCARD_MOUNTED;
+        msg_mount_failed = VFS_EVENT_SDCARD_MOUNT_FAILED;
+        msg_write_failed = VFS_EVENT_SDCARD_WRITE_FAILED;
+    }
+    else
+#endif
+    {
+#if (C_LOG_LEVEL < 3)
+        WLOG(TAG, "[%s] Unknown partition type", __func__);
+#endif
+        return ESP_FAIL;
+    }
+
+    if(!mounted()) {
+        if(mount() == ESP_OK) {
+            ret = 1;
+            delay_ms(10);
+            goto test_write;
+        }
+        else {
+#if (C_LOG_LEVEL < 3)
+            WLOG(TAG, "[%s] Failed to mount part", __func__);
+#endif
+            ret = -1;
         }
     }
-    else if (esp_timer_is_active(sd_timer)) {
-            esp_timer_stop(sd_timer);
-            esp_timer_delete(sd_timer);
+    else {
+        test_write:
+        if(try_open_write(".txt", p->mount_point, 0, 0)) {
+#if (C_LOG_LEVEL < 3)
+            WLOG(TAG, "[%s] Failed to open file", __func__);
+#endif
+            ret = -2;
+        }
+    }
+    if(ret == -2) {
+        p->write_attempts++;
+        if(p->write_attempts > 3) {
+            umount();
+            goto umnt;
+        }
+    }
+    else if(ret != 0) {
+        umnt:
+        if(p->write_attempts > 0) {
+            p->write_attempts = 0;
+        }
+        p->is_mounted = ret > 0 ? 1 : 0;
+        if(ret != -1)
+            vfs_select_part(0);
+        if(ret == 1) {
+            esp_event_post(VFS_EVENT, msg_mounted, NULL, 0, portMAX_DELAY);
+        }
+        else if(ret == -1) {
+            esp_event_post(VFS_EVENT, msg_mount_failed, NULL, 0, portMAX_DELAY);
+        }
+        else if(ret == -2) {
+            esp_event_post(VFS_EVENT, msg_write_failed, NULL, 0, portMAX_DELAY);
+        }
+    }
+    return ret >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+static void my_mount_cb(void* arg) {
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "[%s]", __func__);
+#endif
+    uint8_t i = 0;
+    while(i < VFS_MAX_PARTS) {
+        switch(vfs_ctx.parts[i].part_type) {
+            case VFS_PART_SDCARD:
+            case VFS_PART_FATFS:
+            case VFS_PART_LITTLEFS:
+                m_mount_x(&vfs_ctx.parts[i]);
+                break;
+            default:
+                break;
+        }
+        if(vfs_ctx.parts[i].mount_point && vfs_ctx.parts[i].is_mounted) {
+            vfs_fs_space(vfs_ctx.parts[i].mount_point, vfs_ctx.parts[i].part_type, &vfs_ctx.parts[i].total_bytes, &vfs_ctx.parts[i].free_bytes, &vfs_ctx.parts[i].used_bytes);
+        }
+        ++i;
+    }
+    if (!esp_timer_is_active(sd_timer)) {
+        const esp_timer_create_args_t sd_timer_args = {
+            .callback = &my_mount_cb,
+            .name = "sd_mount",
+            .arg = 0
+        };
+        if(!esp_timer_create(&sd_timer_args, &sd_timer))
+            esp_timer_start_periodic(sd_timer, SEC_TO_US(1)); /// 1s
+        else {
+            ELOG(TAG, "[%s] Failed to create vfs timer", __func__);
+        }
+        do_space_print = 0;
     }
 }
+
 const vfs_config_t * vfs_get_part(const char * mount_point) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
+#endif
     uint8_t i = 0;
     while(i<VFS_MAX_PARTS) {
         if(vfs_ctx.parts[i].mount_point && strstr(mount_point, vfs_ctx.parts[i].mount_point) == mount_point) return &vfs_ctx.parts[i];
@@ -83,7 +279,9 @@ const vfs_config_t * vfs_get_part(const char * mount_point) {
 }
 
 int vfs_get_part_index(const char * mount_point) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
+#endif
     uint8_t i = 0;
     while(i<VFS_MAX_PARTS) {
         if(vfs_ctx.parts[i].mount_point && strstr(mount_point, vfs_ctx.parts[i].mount_point) == mount_point) return i;
@@ -93,14 +291,30 @@ int vfs_get_part_index(const char * mount_point) {
 }
 
 int vfs_select_part(uint8_t log_part_loked) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
-    uint8_t i = 0;
+#endif
+    uint8_t i = 0, j = 0;
     uint64_t free_size = 0;
     struct stat sb = {0};
     int statok;
     char filepath[VFS_FILE_PATH_MAX] = {0};
     strbf_t pathbuf;
     strbf_inits(&pathbuf, &filepath[0], VFS_FILE_PATH_MAX);
+    if(vfs_ctx.config_part != VFS_PART_MAX && !vfs_ctx.parts[vfs_ctx.config_part].is_mounted) {
+#if (C_LOG_LEVEL < 3)
+        ILOG(TAG, "[%s] config part is not available, remove from registry.", __func__);
+#endif
+        vfs_ctx.config_part = VFS_PART_MAX;
+        ++j;
+    }
+    if(vfs_ctx.gps_log_part != VFS_PART_MAX && !vfs_ctx.parts[vfs_ctx.gps_log_part].is_mounted) {
+#if (C_LOG_LEVEL < 3)
+        ILOG(TAG, "[%s] gps log part is not available, remove from registry.", __func__);
+#endif
+        vfs_ctx.gps_log_part = VFS_PART_MAX;
+        ++j;
+    }
     while(i<VFS_MAX_PARTS) {
         if(vfs_ctx.parts[i].part_type == VFS_PART_MAX || !vfs_ctx.parts[i].mount_point) {
             goto next;
@@ -118,13 +332,14 @@ int vfs_select_part(uint8_t log_part_loked) {
             }
             // if((vfs_ctx.gps_log_part == VFS_PART_MAX || free_size < vfs_ctx.parts[i].free_bytes)) {
                 // free_size = vfs_ctx.parts[i].free_bytes;
-                if(vfs_ctx.gps_log_part == VFS_PART_MAX || (!log_part_loked && vfs_ctx.parts[vfs_ctx.gps_log_part].free_bytes < vfs_ctx.parts[i].free_bytes)) {
+            if(vfs_ctx.gps_log_part == VFS_PART_MAX || (!log_part_loked && vfs_ctx.parts[vfs_ctx.gps_log_part].free_bytes < vfs_ctx.parts[i].free_bytes)) {
                 // if(vfs_ctx.parts[i].free_bytes > 9000000) { // 10MB
 #if (C_LOG_LEVEL < 3)
-                    ILOG(TAG, "[%s] GPS log part: %hhu, mountpoint: %s", __func__, i, vfs_ctx.parts[i].mount_point);
+                ILOG(TAG, "[%s] GPS log part: %hhu, mountpoint: %s", __func__, i, vfs_ctx.parts[i].mount_point);
 #endif
-                    vfs_ctx.gps_log_part = i;
-                }
+                vfs_ctx.gps_log_part = i;
+                esp_event_post(VFS_EVENT, VFS_EVENT_LOG_PARTITION_CHANGED, NULL, 0, portMAX_DELAY);
+            }
             //}
             // if(vfs_ctx.web_part == VFS_PART_MAX) {
             //     strbf_puts(&pathbuf, vfs_ctx.parts[i].mount_point);
@@ -142,6 +357,12 @@ int vfs_select_part(uint8_t log_part_loked) {
         next:
         ++i;
     }
+    if(vfs_ctx.gps_log_part == VFS_PART_MAX && j) {
+#if (C_LOG_LEVEL < 3)
+        WLOG(TAG, "[%s] No GPS log part available anymore, sry...", __func__);
+#endif
+        esp_event_post(VFS_EVENT, VFS_EVENT_LOG_PARTITION_CHANGED, NULL, 0, portMAX_DELAY);
+    }
     //assert(
         // vfs_ctx.web_part != VFS_PART_MAX && 
     //    vfs_ctx.gps_log_part != VFS_PART_MAX && vfs_ctx.config_part != VFS_PART_MAX);
@@ -149,8 +370,10 @@ int vfs_select_part(uint8_t log_part_loked) {
 }
 
 int vfs_init(void) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
-    uint8_t i = 0, j, k = 0;
+#endif
+    int8_t i = 0, j, k = 0;
 #if defined(LOG_LOCAL_LEVEL)
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
 #endif
@@ -166,27 +389,25 @@ int vfs_init(void) {
                 if(!sdcard_init()){
                     vfs_ctx.parts[j].mount_point = CONFIG_SD_MOUNT_POINT;
                     vfs_ctx.parts[j].part_type = VFS_PART_SDCARD;
-                    sd_mount_cb(0);
+                    ++k;
                 }
                 break;
 #endif
 #ifdef CONFIG_USE_FATFS
-            case VFS_PART_FATTFS:
+            case VFS_PART_FATFS:
                 if(!fatfs_init()) {
                     vfs_ctx.parts[j].mount_point = CONFIG_FATFS_MOUNT_POINT;
-                    vfs_ctx.parts[j].part_type = VFS_PART_FATTFS;
-                    vfs_ctx.parts[j].is_mounted = 1;
-                    k = 1;
+                    vfs_ctx.parts[j].part_type = VFS_PART_FATFS;
+                    ++k;
                 }
                 break;
 #endif
 #ifdef CONFIG_USE_SPIFFS
             case VFS_PART_SPIFFS:
-                if(spiffs_init()){
+                if(!spiffs_init()){
                     vfs_ctx.parts[j].mount_point = CONFIG_SPIFFS_MOUNT_POINT;
                     vfs_ctx.parts[j].part_type = VFS_PART_SPIFFS;
-                    vfs_ctx.parts[j].is_mounted = 1;
-                    k = 1;
+                    ++k;
                 }
                 break;
 #endif
@@ -195,29 +416,29 @@ int vfs_init(void) {
                 if(!littlefs_init()) {
                     vfs_ctx.parts[j].mount_point = CONFIG_LITTLEFS_MOUNT_POINT;
                     vfs_ctx.parts[j].part_type = VFS_PART_LITTLEFS;
-                    vfs_ctx.parts[j].is_mounted = 1;
-                    k = 1;
+                    ++k;
                 }
                 break;
 #endif
             default:
                 break;
         }
-        if(k) {
-            vfs_select_part(0);
-        }
         ++i;
     }
-    const esp_timer_create_args_t timer_args = {
-        .callback = vfs_update_space,
-        .name = "fs_size",
-        .arg = 0
-    };
-    if(!esp_timer_create(&timer_args, &fs_size_timer))
-        esp_timer_start_periodic(fs_size_timer, SEC_TO_US(60)); // 60s
-    else {
-        ELOG(TAG, "[%s] Failed to create fs size timer", __func__);
+    if(k) {
+        ++do_space_print;
+        my_mount_cb(0);
     }
+    // const esp_timer_create_args_t timer_args = {
+    //     .callback = vfs_update_space,
+    //     .name = "fs_size",
+    //     .arg = 0
+    // };
+    // if(!esp_timer_create(&timer_args, &fs_size_timer))
+    //     esp_timer_start_periodic(fs_size_timer, SEC_TO_US(60)); // 60s
+    // else {
+    //     ELOG(TAG, "[%s] Failed to create fs size timer", __func__);
+    // }
     return ESP_OK;
 }
 
@@ -237,42 +458,65 @@ int vfs_deinit(void) {
     sdcard_uninit();
 #endif
 #ifdef CONFIG_USE_FATFS
+    if(fatfs_is_mounted()) {
+        fatfs_umount();
+    }
     fatfs_uninit();
 #endif
 #ifdef CONFIG_USE_SPIFFS
+    if(spiffs_is_mounted()) {
+        spiffs_umount();
+    }
     spiffs_uninit();
 #endif
 #ifdef CONFIG_USE_LITTLEFS
-    littlefs_deinit();
+    if(littlefs_is_mounted()) {
+        littlefs_umount();
+    }
+    littlefs_uninit();
 #endif
     return ESP_OK;
 }
 
-static const char * const down_str[] = {"bytes", "Kb", "Mb", "Gb"};
+static const char * const down_str[] = {"b", "Kb", "Mb", "Gb"};
 static const char * const strs[] = {
     "Failed to get partition information"
 };
 
-#if (C_LOG_LEVEL < 2)
-int vfs_print_space(const char *mp, uint64_t total_bytes, uint64_t free_bytes, uint64_t used_bytes) {
-    double bytes[3] = {total_bytes, free_bytes, used_bytes};
-    uint8_t down[3] = {0, 0, 0};
-    for(uint8_t i=0; i<3; ++i) {
-        while(down[i] < 3 && bytes[i] > 10000) {
-            bytes[i] /= 1000;
-            ++down[i];
-        }
+static int vfs_mp_str(uint64_t b, char *buf) {
+    if(!buf) return ESP_FAIL;
+    uint8_t down = 0;
+    char * p = buf;
+    double bytes = (double)b;
+    while(down < 3 && bytes > 10000) {
+        bytes /= 1000;
+        ++down;
     }
-    ILOG(TAG, "[%s] Mountpoint: %s Total space: %.3lf %s, Free space: %.3lf %s, Used space: %.3lf %s", __func__, mp,
-        bytes[0], down_str[down[0]], 
-        bytes[1], down_str[down[1]], 
-        bytes[2], down_str[down[2]]);
+    size_t l = f2_to_char(bytes, p);
+    p += l;
+    *p = ' ';
+    ++p;
+    l = strlen(down_str[down]);
+    memcpy(p, down_str[down], l);
+    p += l;
+    *p = 0;
+    return p-buf;
+}
+
+int vfs_print_space(const char *mp, uint64_t total_bytes, uint64_t free_bytes, uint64_t used_bytes) {
+    char buf[3][32] = {0};
+    vfs_mp_str(total_bytes, buf[0]);
+    vfs_mp_str(free_bytes, buf[1]);
+    vfs_mp_str(used_bytes, buf[2]);
+    WLOG(TAG, "Mountpoint: %s Total: %s, Free: %s, Used: %s", mp, buf[0], buf[1], buf[2]);
+    // do_space_print = 0;
     return ESP_OK;
 }
-#endif
 
 void vfs_update_space(void*arg) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __func__);
+#endif
     uint8_t i = 0;
     while(i<VFS_MAX_PARTS) {
         if(vfs_ctx.parts[i].mount_point && vfs_ctx.parts[i].is_mounted) {
@@ -282,8 +526,36 @@ void vfs_update_space(void*arg) {
     }
 }
 
+int vfs_space_str(char*arg, size_t arglen) {
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "[%s]", __func__);
+#endif
+    uint8_t i = vfs_ctx.gps_log_part;
+    size_t len = 0;
+    const char *p = arg;
+    // while(i<VFS_MAX_PARTS) {
+        if(vfs_ctx.parts[i].mount_point && vfs_ctx.parts[i].is_mounted) {
+            // if(i > 0) {
+            //     *arg = ',', ++arg;
+            // }
+            len = strlen(vfs_ctx.parts[i].mount_point)-1;
+            memcpy(arg, vfs_ctx.parts[i].mount_point+1, len >= arglen ? arglen - 1 : len);
+            arg += len, *arg = ' ', ++arg;
+            arg += vfs_mp_str(vfs_ctx.parts[i].free_bytes, arg);
+        }
+        else {
+            memcpy(arg, "- nolog -", 9), arg += 9;
+        }
+    //    ++i;
+    // }
+    *arg = 0;
+    return (arg - p);
+}
+
 int vfs_fs_space(const char * mp, uint8_t type, uint64_t *total_bytes, uint64_t *free_bytes, uint64_t *used_bytes) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __FUNCTION__);
+#endif
     assert(total_bytes && used_bytes && free_bytes);
     esp_err_t ret;
 #if defined(CONFIG_USE_SD_CARD) || defined(CONFIG_USE_FATFS)
@@ -294,7 +566,7 @@ int vfs_fs_space(const char * mp, uint8_t type, uint64_t *total_bytes, uint64_t 
     ret = esp_littlefs_info(mp, total_bytes, used_bytes);
 #endif
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "%s (%s)", strs[0], esp_err_to_name(ret));
+        WLOG(TAG, "%s (%s)", strs[0], esp_err_to_name(ret));
         return ret;
     }
     if(ret) return ret;
@@ -303,9 +575,8 @@ int vfs_fs_space(const char * mp, uint8_t type, uint64_t *total_bytes, uint64_t 
 #else
     *free_bytes = *total_bytes - *used_bytes;
 #endif
-#if (C_LOG_LEVEL < 2)
-    vfs_print_space(mp, *total_bytes, *free_bytes, *used_bytes);
-#endif
+    if (do_space_print)
+        vfs_print_space(mp, *total_bytes, *free_bytes, *used_bytes);
     return ESP_OK;
 }
 
@@ -381,13 +652,10 @@ FILE *s_open_file(const char *name, const char *base, const char *mode) {
     FILE *f = fopen(p, mode);
     if (f == NULL) {
 #if (C_LOG_LEVEL < 3)
-        ESP_LOGE(TAG, "[%s] open '%s' failed '%s'.", __FUNCTION__, p, strerror(errno));
+        WLOG(TAG, "[%s] open '%s' failed '%s'.", __FUNCTION__, p, strerror(errno));
 #endif
         return 0;
     }
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s] file:'%s', mode:'%s'", __FUNCTION__, p, mode);
-#endif
     return f;
 }
 
@@ -419,14 +687,30 @@ int s_open(const char *name, const char *base, const char *mode) {
     int f = open(p, m);
     if (f < 0) {
 #if (C_LOG_LEVEL < 3)
-        ESP_LOGE(TAG, "[%s] open '%s' failed: '%s'", __FUNCTION__, p, strerror(errno));
+        WLOG(TAG, "[%s] open '%s' failed: '%s'", __FUNCTION__, p, strerror(errno));
 #endif
         return -1;
     }
-#if (C_LOG_LEVEL < 2)
-    ILOG(TAG, "[%s] file:'%s', mode:'%s'", __FUNCTION__, p, mode);
-#endif
     return f;
+}
+
+esp_err_t s_remove_file(const char *name, const char *base) {
+#if (C_LOG_LEVEL < 2)
+    ILOG(TAG, "[%s] %s %s", __FUNCTION__, base ? base : "", name);
+#endif
+    if (name == 0 || name[0] == 0)
+        return ESP_FAIL;
+    char path[PATH_MAX_CHAR_SIZE] = {0};
+    const char *p = path;
+    get_file_path_width_base(&(path[0]), PATH_MAX_CHAR_SIZE, name, base);
+    p = (*path ? path : name);
+    if (unlink(p) < 0) {
+#if (C_LOG_LEVEL < 3)
+        WLOG(TAG, "[%s] unlink '%s' failed: '%s'", __FUNCTION__, p, strerror(errno));
+#endif
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
 
 esp_err_t s_write_file(const char *name, const char *base, char *data) {
@@ -457,17 +741,17 @@ esp_err_t s_write(const char *name, const char *base, char *data, size_t len) {
     int bytes = write(f, data, len ? len : strlen(data));
     if (bytes < 0) {
 #if (C_LOG_LEVEL < 3)
-        ELOG(TAG, "Failed to write (%s) fd:%d", strerror(errno), f);
+        WLOG(TAG, "Failed to write (%s) fd:%d", strerror(errno), f);
 #endif
     }
     if (fsync(f)) {
 #if (C_LOG_LEVEL < 3)
-        ELOG(TAG, "Failed to sync (%s) fd:%d", strerror(errno), f);
+        WLOG(TAG, "Failed to sync (%s) fd:%d", strerror(errno), f);
 #endif
     }
     if (close(f)) {
 #if (C_LOG_LEVEL < 3)
-        ELOG(TAG, "Failed to close (%s) fd:%d", strerror(errno), f);
+        WLOG(TAG, "Failed to close (%s) fd:%d", strerror(errno), f);
 #endif
     }
     return bytes;
@@ -487,7 +771,7 @@ char *s_read_from_file(const char *name, const char *base) {
         int err = read(f, buffer, sizeof(char) * flength);
         if (err < 0) {
 #if (C_LOG_LEVEL < 3)
-            ELOG(TAG, "Failed to read (%s) fd:%d", strerror(errno), f);
+            WLOG(TAG, "Failed to read (%s) fd:%d", strerror(errno), f);
 #endif
             free(buffer);
             buffer = 0;
@@ -495,7 +779,7 @@ char *s_read_from_file(const char *name, const char *base) {
             buffer[flength] = 0;
         if (close(f)) {
 #if (C_LOG_LEVEL < 3)
-            ELOG(TAG, "Failed to close (%s)", strerror(errno));
+            WLOG(TAG, "Failed to close (%s)", strerror(errno));
 #endif
         }
     }
@@ -513,14 +797,14 @@ int s_rename_file_n(const char *old, const char *new, uint8_t rmifexists) {
     if (s_xfile_exists(new) && rmifexists) {
         if (unlink(new) < 0) {
 #if (C_LOG_LEVEL < 3)
-            ELOG(TAG, "[%s] Failed to unlink (%s)", __FILE__, strerror(errno));
+            WLOG(TAG, "[%s] Failed to unlink (%s)", __FILE__, strerror(errno));
 #endif
             return -1;
         }
     }
     if (rename(old, new) < 0) {
 #if (C_LOG_LEVEL < 3)
-        ELOG(TAG, "[%s] Failed to rename [%s to %s], (%s)", __FILE__, old, new, strerror(errno));
+        WLOG(TAG, "[%s] Failed to rename [%s to %s], (%s)", __FILE__, old, new, strerror(errno));
 #endif
         return -1;
     }

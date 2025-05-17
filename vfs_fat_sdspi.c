@@ -53,62 +53,10 @@ typedef struct wl_context_s {
 
 static struct wl_context_s wl_ctx = WL_CONTEXT_INIT;
 
-#ifdef CONFIG_SD_DEBUG_STATS
-#define TIME_ARRAY_SIZE 500
-#define PRINT_DIFF 0
-#define WRITE_BUFFER_SIZE (16 * 1024)
-
-static esp_err_t s_write_speed(const char *name) {
-    ILOG(TAG, "[%s]", __FUNCTION__);
-    if (name == 0 || *name == 0)
-        return ESP_FAIL;
-    // ILOG(TAG, "[%s] file:%s", __FUNCTION__, name);
-    FILE *f = s_open_file(name, wl_ctx.mount_point, "w");
-    if (f == NULL) {
-        ESP_LOGE(TAG, "Failed to open file for writing");
-        return ESP_FAIL;
-    }
-    uint64_t time_array[TIME_ARRAY_SIZE];
-    char write_buffer[WRITE_BUFFER_SIZE];
-    ILOG(TAG, "[%s] Init write buffer ", __FUNCTION__);
-    // initialize write buffer
-    for (int i = 0; i < WRITE_BUFFER_SIZE; i++) {
-        write_buffer[i] = ' ' + (i % 64);
-    }
-
-    // ILOG(TAG, "[%s] Write to file ", __FUNCTION__);
-    uint64_t start = esp_timer_get_time();
-    for (int counter = 0; counter < TIME_ARRAY_SIZE; counter++) {
-        fwrite(write_buffer, 1, WRITE_BUFFER_SIZE, f);
-        time_array[counter] = esp_timer_get_time();
-    }
-    fclose(f);
-    // ILOG(TAG, "[%s] File written ", __FUNCTION__);
-
-    uint64_t sum = 0;
-    uint64_t maximum = 0;
-    uint64_t minimum = UINT64_MAX;
-    for (int i = 0; i < TIME_ARRAY_SIZE; i++) {
-        uint64_t end = time_array[i];
-        uint64_t diff = end - start;
-        maximum = (diff > maximum) ? diff : maximum;
-        minimum = (diff < minimum) ? diff : minimum;
-        sum += diff;
-        start = end;
-    }
-    uint64_t average = sum / TIME_ARRAY_SIZE;
-    ILOG(TAG, "write buffer size = %d", WRITE_BUFFER_SIZE);
-    ILOG(TAG, "sum=%llu microseconds, average=%llu microseconds", sum, average);
-    ILOG(TAG, "maximum=%llu microseconds, minimum=%llu microseconds", maximum, minimum);
-    ILOG(TAG, "highest write speed = %llu byte/s", ((uint64_t)WRITE_BUFFER_SIZE) * 1000 * 1000 / minimum);
-    ILOG(TAG, "average write speed = %llu byte/s", ((uint64_t)WRITE_BUFFER_SIZE) * 1000 * 1000 / average);
-    ILOG(TAG, "lowest write speed = %llu byte/s", ((uint64_t)WRITE_BUFFER_SIZE) * 1000 * 1000 / maximum);
-    return ESP_OK;
-}
-#endif
-
 static uint32_t init_host_frequency() {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __FUNCTION__);
+#endif
     assert(wl_ctx.volume_handle->max_freq_khz <= wl_ctx.volume_handle->host.max_freq_khz);
 
     /* Find highest frequency in the following list,
@@ -129,7 +77,9 @@ static uint32_t init_host_frequency() {
     for (int i = 0; i < n_freq_values; ++i) {
         uint32_t freq = freq_values[i];
         if (wl_ctx.volume_handle->max_freq_khz >= freq) {
+#if (C_LOG_LEVEL < 3)
             ILOG(TAG, "Set card max allowed frequency to %lu", freq);
+#endif
             selected_freq = freq;
             break;
         }
@@ -230,7 +180,9 @@ pin_configuration_t pin_test_config = {
 
 
 int sdcard_init(void) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __FUNCTION__);
+#endif
     esp_err_t ret = ESP_OK;
 
     sdmmc_host_t lhost = SDSPI_HOST_DEFAULT();
@@ -266,7 +218,9 @@ int sdcard_init(void) {
 
 #if defined(CONFIG_SD_USE_SPI)
 
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Using SDSPI peripheral", __func__);
+#endif
 #if (CONFIG_SD_PIN_CLK >= 0)
         gpio_set_pull_mode(CONFIG_SD_PIN_CLK, GPIO_PULLUP_ONLY);
 #endif
@@ -288,10 +242,12 @@ int sdcard_init(void) {
         .max_transfer_sz = 4000,
     };
     memcpy(&wl_ctx.bus_cfg, &bus_cfg, sizeof(spi_bus_config_t));
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Initializing sdspi device at slot: %d", __func__, wl_ctx.host.slot);
+#endif
     ret = spi_bus_initialize(wl_ctx.host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK) {
-        ELOG(TAG, "[%s] Failed to initialize sdspi device (%s).", __func__, esp_err_to_name(ret));
+        WLOG(TAG, "[%s] Failed to initialize sdspi device (%s).", __func__, esp_err_to_name(ret));
         goto done;
     }
     // This initializes the slot without card detect (CD) and write protect (WP)
@@ -304,7 +260,9 @@ int sdcard_init(void) {
 
 #else
 
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Using SMMMC peripheral", __func__);
+#endif
 
     sdmmc_slot_config_t device_config = SDMMC_SLOT_CONFIG_DEFAULT();
 #if _IS_UHS1
@@ -334,7 +292,9 @@ int sdcard_init(void) {
 #endif
 
     esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_INIT_DONE, 0, 0, portMAX_DELAY);
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] done", __func__);
+#endif
 #if defined(CONFIG_SD_USE_SPI)
     done:
 #endif
@@ -342,7 +302,9 @@ int sdcard_init(void) {
 }
 
 int sdcard_mount(void) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __FUNCTION__);
+#endif
     esp_err_t ret = ESP_OK;
     // Options for mounting the filesystem.
     // If format_if_mount_failed is set to true, SD card will be partitioned and
@@ -366,12 +328,10 @@ int sdcard_mount(void) {
 
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
-            ESP_LOGE(TAG, "Failed to mount filesystem.");
+            WLOG(TAG, "[%s] Failed to mount filesystem.", __func__);
          } else {
-            ELOG(TAG,
-                     "Failed to initialize the card (%s). "
-                     "Make sure SD card lines have pull-up resistors in place.",
-                     esp_err_to_name(ret));
+            WLOG(TAG, "[%s] Failed to initialize the card (%s). "
+                 "Make sure SD card lines have pull-up resistors in place.", __func__, esp_err_to_name(ret));
 #ifdef CONFIG_DEBUG_PIN_CONNECTIONS
             check_pins(&pin_test_config, pin_count);
 #endif
@@ -415,7 +375,9 @@ int sdcard_mount(void) {
 }
 
 void sdcard_umount(void) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __FUNCTION__);
+#endif
     // All done, unmount partition and disable SDMMC peripheral
     if(wl_ctx.mounted) {
         if (!wl_ctx.volume_handle) {
@@ -428,13 +390,16 @@ void sdcard_umount(void) {
         if (ret == ESP_OK)
             ILOG(TAG, "[%s] Card unmounted", __func__);
 #endif
+        wl_ctx.mounted = 0;
         esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_UNMOUNTED, 0, 0, portMAX_DELAY);
         UNUSED_PARAMETER(ret);
     }
 }
 
 void sdcard_uninit(void) {
+#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s]", __FUNCTION__);
+#endif
     esp_err_t ret;
 #if defined(CONFIG_SD_USE_SPI)
     spi_bus_free(wl_ctx.host.slot);

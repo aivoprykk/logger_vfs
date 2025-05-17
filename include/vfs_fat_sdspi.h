@@ -9,9 +9,9 @@ extern "C" {
 #include <stdbool.h>
 
 int sdcard_init(void);
-void sdcard_uninit(void);
 int sdcard_mount(void);
 void sdcard_umount(void);
+void sdcard_uninit(void);
 bool sdcard_is_mounted(void);
 
 #ifdef __cplusplus
