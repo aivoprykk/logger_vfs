@@ -39,6 +39,9 @@ static esp_timer_handle_t sd_timer = 0;
 static esp_timer_handle_t fs_size_timer = 0;
 vfs_t vfs_ctx = VFS_DEDAULTS();
 static int do_space_print = 0;
+// Shared path buffer to reduce stack allocation
+static char shared_path_buffer[PATH_MAX_CHAR_SIZE];
+static SemaphoreHandle_t path_buffer_mutex = NULL;
 
 static esp_err_t try_open_write(const char *name, const char * mount_point, void (*cb)(void*), void *arg) {
 #if (C_LOG_LEVEL < 3)
@@ -46,14 +49,16 @@ static esp_err_t try_open_write(const char *name, const char * mount_point, void
 #endif
     if (name == 0 || *name == 0)
         return ESP_FAIL;
-    int attempts = 2;
+    int attempts = 1; // Reduced from 2 to 1 to speed up operation
     FILE *f = 0;
     try_again:
     f = s_open_file(name, mount_point, "w");
     if (f == NULL) {
-        WLOG(TAG, "[%s] Failed to open open file in %s.", __func__, mount_point);
+        WLOG(TAG, "[%s] Failed to open file in %s.", __func__, mount_point);
         if(attempts-- > 0) {
             s_remove_file(name, mount_point);
+            // Small delay instead of potentially blocking operation
+            vTaskDelay(pdMS_TO_TICKS(1));
             goto try_again;
         }
         return ESP_FAIL;
@@ -184,7 +189,7 @@ static esp_err_t m_mount_x(vfs_config_t *p) {
     if(!mounted()) {
         if(mount() == ESP_OK) {
             ret = 1;
-            delay_ms(10);
+            vTaskDelay(pdMS_TO_TICKS(5)); // Reduced from 10ms delay_ms to 5ms vTaskDelay
             goto test_write;
         }
         else {
@@ -219,13 +224,13 @@ static esp_err_t m_mount_x(vfs_config_t *p) {
         if(ret != -1)
             vfs_select_part(0);
         if(ret == 1) {
-            esp_event_post(VFS_EVENT, msg_mounted, NULL, 0, portMAX_DELAY);
+            esp_event_post(VFS_EVENT, msg_mounted, NULL, 0, pdMS_TO_TICKS(100));
         }
         else if(ret == -1) {
-            esp_event_post(VFS_EVENT, msg_mount_failed, NULL, 0, portMAX_DELAY);
+            esp_event_post(VFS_EVENT, msg_mount_failed, NULL, 0, pdMS_TO_TICKS(100));
         }
         else if(ret == -2) {
-            esp_event_post(VFS_EVENT, msg_write_failed, NULL, 0, portMAX_DELAY);
+            esp_event_post(VFS_EVENT, msg_write_failed, NULL, 0, pdMS_TO_TICKS(100));
         }
     }
     return ret >= 0 ? ESP_OK : ESP_FAIL;
@@ -236,21 +241,39 @@ static void my_mount_cb(void* arg) {
     ILOG(TAG, "[%s]", __func__);
 #endif
     uint8_t i = 0;
+    bool space_update_needed = false;
+    
     while(i < VFS_MAX_PARTS) {
         switch(vfs_ctx.parts[i].part_type) {
             case VFS_PART_SDCARD:
             case VFS_PART_FATFS:
             case VFS_PART_LITTLEFS:
-                m_mount_x(&vfs_ctx.parts[i]);
+                if(m_mount_x(&vfs_ctx.parts[i]) == ESP_OK) {
+                    space_update_needed = true;
+                }
                 break;
             default:
                 break;
         }
-        if(vfs_ctx.parts[i].mount_point && vfs_ctx.parts[i].is_mounted) {
-            vfs_fs_space(vfs_ctx.parts[i].mount_point, vfs_ctx.parts[i].part_type, &vfs_ctx.parts[i].total_bytes, &vfs_ctx.parts[i].free_bytes, &vfs_ctx.parts[i].used_bytes);
-        }
         ++i;
     }
+    
+    // Only update filesystem space if needed and defer heavy operations
+    if(space_update_needed) {
+        i = 0;
+        while(i < VFS_MAX_PARTS) {
+            if(vfs_ctx.parts[i].mount_point && vfs_ctx.parts[i].is_mounted) {
+                // Defer heavy vfs_fs_space operation - only call if really needed
+                if(vfs_ctx.parts[i].free_bytes == 0) {
+                    vfs_fs_space(vfs_ctx.parts[i].mount_point, vfs_ctx.parts[i].part_type, 
+                                &vfs_ctx.parts[i].total_bytes, &vfs_ctx.parts[i].free_bytes, 
+                                &vfs_ctx.parts[i].used_bytes);
+                }
+            }
+            ++i;
+        }
+    }
+    
     if (!esp_timer_is_active(sd_timer)) {
         const esp_timer_create_args_t sd_timer_args = {
             .callback = &my_mount_cb,
@@ -258,7 +281,7 @@ static void my_mount_cb(void* arg) {
             .arg = 0
         };
         if(!esp_timer_create(&sd_timer_args, &sd_timer))
-            esp_timer_start_periodic(sd_timer, SEC_TO_US(1)); /// 1s
+            esp_timer_start_periodic(sd_timer, SEC_TO_US(2)); /// Increased to 2s to reduce overhead
         else {
             ELOG(TAG, "[%s] Failed to create vfs timer", __func__);
         }
@@ -338,7 +361,7 @@ int vfs_select_part(uint8_t log_part_loked) {
                 ILOG(TAG, "[%s] GPS log part: %hhu, mountpoint: %s", __func__, i, vfs_ctx.parts[i].mount_point);
 #endif
                 vfs_ctx.gps_log_part = i;
-                esp_event_post(VFS_EVENT, VFS_EVENT_LOG_PARTITION_CHANGED, NULL, 0, portMAX_DELAY);
+                esp_event_post(VFS_EVENT, VFS_EVENT_LOG_PARTITION_CHANGED, NULL, 0, pdMS_TO_TICKS(100));
             }
             //}
             // if(vfs_ctx.web_part == VFS_PART_MAX) {
@@ -361,7 +384,7 @@ int vfs_select_part(uint8_t log_part_loked) {
 #if (C_LOG_LEVEL < 3)
         WLOG(TAG, "[%s] No GPS log part available anymore, sry...", __func__);
 #endif
-        esp_event_post(VFS_EVENT, VFS_EVENT_LOG_PARTITION_CHANGED, NULL, 0, portMAX_DELAY);
+        esp_event_post(VFS_EVENT, VFS_EVENT_LOG_PARTITION_CHANGED, NULL, 0, pdMS_TO_TICKS(100));
     }
     //assert(
         // vfs_ctx.web_part != VFS_PART_MAX && 
@@ -377,6 +400,15 @@ int vfs_init(void) {
 #if defined(LOG_LOCAL_LEVEL)
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
 #endif
+    
+    // Initialize path buffer mutex for heap optimization
+    if (!path_buffer_mutex) {
+        path_buffer_mutex = xSemaphoreCreateMutex();
+        if (!path_buffer_mutex) {
+            ELOG(TAG, "[%s] Failed to create path buffer mutex", __func__);
+        }
+    }
+    
     while(i < VFS_PART_MAX) {
         j = 0, k = 0;
         while(j < VFS_MAX_PARTS) {
@@ -451,6 +483,13 @@ int vfs_deinit(void) {
             esp_timer_stop(sd_timer);
             esp_timer_delete(sd_timer);
     }
+    
+    // Cleanup path buffer mutex
+    if (path_buffer_mutex) {
+        vSemaphoreDelete(path_buffer_mutex);
+        path_buffer_mutex = NULL;
+    }
+    
 #ifdef CONFIG_USE_SD_CARD
     if(sdcard_is_mounted()) {
         sdcard_umount();
@@ -645,18 +684,37 @@ FILE *s_open_file(const char *name, const char *base, const char *mode) {
         return 0;
     if (mode == 0)
         mode = "rb";
-    char path[PATH_MAX_CHAR_SIZE] = {0};
-    const char *p;
-    get_file_path_width_base(&(path[0]), PATH_MAX_CHAR_SIZE, name, base);
-    p = (*path ? path : name);
-    FILE *f = fopen(p, mode);
-    if (f == NULL) {
+    
+    // Use shared buffer to reduce stack allocation
+    if (path_buffer_mutex && xSemaphoreTake(path_buffer_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        const char *p;
+        get_file_path_width_base(shared_path_buffer, PATH_MAX_CHAR_SIZE, name, base);
+        p = (*shared_path_buffer ? shared_path_buffer : name);
+        FILE *f = fopen(p, mode);
+        xSemaphoreGive(path_buffer_mutex);
+        
+        if (f == NULL) {
 #if (C_LOG_LEVEL < 3)
-        WLOG(TAG, "[%s] open '%s' failed '%s'.", __FUNCTION__, p, strerror(errno));
+            WLOG(TAG, "[%s] open '%s' failed '%s'.", __FUNCTION__, p, strerror(errno));
 #endif
-        return 0;
+            return 0;
+        }
+        return f;
+    } else {
+        // Fallback to stack buffer if mutex unavailable
+        char path[PATH_MAX_CHAR_SIZE] = {0};
+        const char *p;
+        get_file_path_width_base(&(path[0]), PATH_MAX_CHAR_SIZE, name, base);
+        p = (*path ? path : name);
+        FILE *f = fopen(p, mode);
+        if (f == NULL) {
+#if (C_LOG_LEVEL < 3)
+            WLOG(TAG, "[%s] open '%s' failed '%s'.", __FUNCTION__, p, strerror(errno));
+#endif
+            return 0;
+        }
+        return f;
     }
-    return f;
 }
 
 int s_open(const char *name, const char *base, const char *mode) {

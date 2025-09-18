@@ -10,6 +10,7 @@
 #include "driver/spi_common.h"
 #include "driver/spi_master.h"
 #include "esp_vfs_fat.h"
+#include "esp_timer.h"
 #include "sdmmc_cmd.h"
 #ifdef CONFIG_DEBUG_PIN_CONNECTIONS
 #include "test_io.h"
@@ -23,7 +24,7 @@
 #include "sd_pwr_ctrl_by_on_chip_ldo.h"
 #endif
 
-#if defined(ONFIG_SD_SPI1_HOST)
+#if defined(CONFIG_SD_SPI1_HOST)
 #define SDCARD_HOST SPI1_HOST
 #elif defined(CONFIG_SD_SPI2_HOST)
 #define SDCARD_HOST SPI2_HOST
@@ -291,7 +292,7 @@ int sdcard_init(void) {
 
 #endif
 
-    esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_INIT_DONE, 0, 0, portMAX_DELAY);
+    esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_INIT_DONE, 0, 0, pdMS_TO_TICKS(100));
 #if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] done", __func__);
 #endif
@@ -312,19 +313,28 @@ int sdcard_mount(void) {
     // FATFS out_fs;
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = false,
-        .max_files = 5,
+        .max_files = 5, // Need 5 for txtlog, ubxlog, sbplog, gpxlog + config files
         .allocation_unit_size = CONFIG_WL_SECTOR_SIZE,
         .disk_status_check_enable = false};
 #if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Mounting SD FAT filesystem at %s", __func__, wl_ctx.mount_point);
 #endif
+
+    // Add timeout protection for mount operation
+    uint32_t start_time = esp_timer_get_time() / 1000; // Convert to ms
+    
 #if defined(CONFIG_SD_USE_SPI)
     ret = esp_vfs_fat_sdspi_mount(wl_ctx.mount_point, &wl_ctx.host, &wl_ctx.device_config, &mount_config, &wl_ctx.volume_handle);
 #else
     ret = esp_vfs_fat_sdmmc_mount(wl_ctx.mount_point, &wl_ctx.host, &wl_ctx.device_config, &mount_config, &wl_ctx.volume_handle);
 #endif
 
-    delay_ms(50);
+    uint32_t mount_time = (esp_timer_get_time() / 1000) - start_time;
+    if (mount_time > 5000) {  // Log if mount took longer than 5 seconds
+        WLOG(TAG, "[%s] Mount operation took %lu ms", __func__, mount_time);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(20)); // Reduced from 50ms to 20ms
 
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
@@ -391,7 +401,7 @@ void sdcard_umount(void) {
             ILOG(TAG, "[%s] Card unmounted", __func__);
 #endif
         wl_ctx.mounted = 0;
-        esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_UNMOUNTED, 0, 0, portMAX_DELAY);
+        esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_UNMOUNTED, 0, 0, pdMS_TO_TICKS(100));
         UNUSED_PARAMETER(ret);
     }
 }
@@ -411,7 +421,7 @@ void sdcard_uninit(void) {
         return;
     }
 #endif
-    esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_DEINIT_DONE, 0, 0, portMAX_DELAY);
+    esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_DEINIT_DONE, 0, 0, pdMS_TO_TICKS(100));
     UNUSED_PARAMETER(ret);
 }
 

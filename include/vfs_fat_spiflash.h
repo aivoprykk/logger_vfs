@@ -10,6 +10,7 @@ extern "C" {
 
 int fatfs_init();
 int fatfs_mount();
+int fatfs_format(const char *mountpoint);
 void fatfs_umount();
 void fatfs_uninit();
 bool fatfs_is_mounted(void);

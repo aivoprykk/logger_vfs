@@ -1,5 +1,3 @@
-
-
 #include "vfs_private.h"
 #ifdef CONFIG_USE_FATFS
 
@@ -79,6 +77,24 @@ int fatfs_mount() {
         wl_ctx.mounted = 1;
     }
     done:
+    return ret;
+}
+
+int fatfs_format(const char *mountpoint) {
+#if (C_LOG_LEVEL < 3)
+    ILOG(TAG, "[%s] Formatting FAT filesystem on mount_point:%s, label:%s", __func__, wl_ctx.mount_point, wl_ctx.base_label);
+#endif
+    // For now, only support the default mountpoint
+    // const char * mp = wl_ctx.mount_point;
+    // while(*mp=='/') ++mp;
+    if (strcmp(mountpoint, wl_ctx.mount_point) != 0) {
+        ESP_LOGE(TAG, "Unsupported mountpoint for format: %s", mountpoint);
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t ret = esp_vfs_fat_spiflash_format_rw_wl(wl_ctx.mount_point, wl_ctx.base_label);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to format FAT filesystem. (%s)", esp_err_to_name(ret));
+    }
     return ret;
 }
 
