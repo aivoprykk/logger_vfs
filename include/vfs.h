@@ -41,6 +41,7 @@ typedef struct vfs_s {
     vfs_config_t parts[VFS_MAX_PARTS];
     uint8_t config_part;
     uint8_t gps_log_part;
+    uint8_t vfs_initialized;
     // uint8_t web_part;
 } vfs_t;
 
