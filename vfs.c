@@ -42,11 +42,18 @@ static int do_space_print = 0;
 // Shared path buffer to reduce stack allocation
 static char shared_path_buffer[PATH_MAX_CHAR_SIZE];
 static SemaphoreHandle_t path_buffer_mutex = NULL;
+static volatile bool vfs_shutdown_in_progress = false;  /* Track shutdown state separately */
 
 static esp_err_t try_open_write(const char *name, const char * mount_point, void (*cb)(void*), void *arg) {
     FUNC_ENTRY(TAG);
     if (name == 0 || *name == 0)
         return ESP_FAIL;
+        
+    // Safety check: Don't operate if VFS is not initialized
+    // if (!vfs_ctx.vfs_initialized) {
+    //     WLOG(TAG, "[%s] VFS not initialized, cannot open file", __func__);
+    //     return ESP_FAIL;
+    // }
     int attempts = 1; // Reduced from 2 to 1 to speed up operation
     FILE *f = 0;
     try_again:
@@ -224,6 +231,21 @@ static esp_err_t m_mount_x(vfs_config_t *p) {
 
 static void my_mount_cb(void* arg) {
     FUNC_ENTRY(TAG);
+    
+    /* Use path_buffer_mutex to coordinate with vfs_deinit() */
+    /* Try to acquire mutex with no wait - if locked, shutdown is in progress */
+    if (!path_buffer_mutex || xSemaphoreTake(path_buffer_mutex, 0) != pdTRUE) {
+        DLOG(TAG, "[%s] Mutex unavailable, skipping callback", __func__);
+        return;
+    }
+    
+    /* Check if shutdown is in progress after acquiring lock */
+    if (vfs_shutdown_in_progress) {
+        xSemaphoreGive(path_buffer_mutex);
+        DLOG(TAG, "[%s] VFS shutdown in progress, exiting callback", __func__);
+        return;
+    }
+    
     uint8_t i = 0;
     bool space_update_needed = false;
     
@@ -271,6 +293,9 @@ static void my_mount_cb(void* arg) {
         }
         do_space_print = 0;
     }
+    
+    /* Release mutex before exiting callback */
+    xSemaphoreGive(path_buffer_mutex);
 }
 
 const vfs_config_t * vfs_get_part(const char * mount_point) {
@@ -366,6 +391,9 @@ int vfs_init(void) {
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
 #endif
     
+    /* Clear shutdown flag at start of initialization */
+    vfs_shutdown_in_progress = false;
+    
     // Initialize path buffer mutex for heap optimization
     if (!path_buffer_mutex) {
         path_buffer_mutex = xSemaphoreCreateMutex();
@@ -442,21 +470,45 @@ int vfs_init(void) {
 
 int vfs_deinit(void) {
     if (!vfs_ctx.vfs_initialized) return ESP_OK;
-    if (esp_timer_is_active(fs_size_timer)) {
-            esp_timer_stop(fs_size_timer);
-            esp_timer_delete(fs_size_timer);
-    }
-    if (esp_timer_is_active(sd_timer)) {
-            esp_timer_stop(sd_timer);
-            esp_timer_delete(sd_timer);
-    }
     
-    // Cleanup path buffer mutex
+    /* Step 1: Acquire mutex to prevent timer callbacks from running */
+    /* This blocks until any active callback completes */
+    bool mutex_acquired = false;
     if (path_buffer_mutex) {
-        vSemaphoreDelete(path_buffer_mutex);
-        path_buffer_mutex = NULL;
+        mutex_acquired = xSemaphoreTake(path_buffer_mutex, pdMS_TO_TICKS(1000)) == pdTRUE;
+        if (!mutex_acquired) {
+            ELOG(TAG, "[%s] Failed to acquire mutex for shutdown", __func__);
+        }
     }
     
+    /* Step 2: Set shutdown flag to prevent new callbacks from running */
+    vfs_shutdown_in_progress = true;
+    
+    /* Step 3: Mark VFS as not initialized */
+    vfs_ctx.vfs_initialized = 0;
+    
+    /* Step 4: Stop and delete timers while holding mutex */
+    /* Timer callbacks check shutdown flag after acquiring mutex, so they'll exit */
+    if (sd_timer) {
+        if (esp_timer_is_active(sd_timer)) {
+            esp_timer_stop(sd_timer);
+        }
+        esp_timer_delete(sd_timer);
+        sd_timer = NULL;
+    }
+    
+    if (fs_size_timer) {
+        if (esp_timer_is_active(fs_size_timer)) {
+            esp_timer_stop(fs_size_timer);
+        }
+        esp_timer_delete(fs_size_timer);
+        fs_size_timer = NULL;
+    }
+    
+    /* Step 4: Small delay to ensure timer deletion completes */
+    vTaskDelay(pdMS_TO_TICKS(10));
+    
+    /* Step 5: Now safe to unmount filesystems - no callbacks can access them */
 #ifdef CONFIG_USE_SD_CARD
     if(sdcard_is_mounted()) {
         sdcard_umount();
@@ -481,7 +533,20 @@ int vfs_deinit(void) {
     }
     littlefs_uninit();
 #endif
-    vfs_ctx.vfs_initialized = 0;
+    
+    /* Step 6: Release mutex and delete it last */
+    if (mutex_acquired && path_buffer_mutex) {
+        xSemaphoreGive(path_buffer_mutex);
+    }
+    
+    if (path_buffer_mutex) {
+        vSemaphoreDelete(path_buffer_mutex);
+        path_buffer_mutex = NULL;
+    }
+    
+    /* Clear shutdown flag to allow re-initialization */
+    vfs_shutdown_in_progress = false;
+    
     return ESP_OK;
 }
 
@@ -642,8 +707,21 @@ FILE *s_open_file(const char *name, const char *base, const char *mode) {
     if (name == 0 || name[0] == 0) return 0;
     if (mode == 0) mode = "rb";
     
+    /* Quick check: don't even try if shutdown is in progress */
+    if (vfs_shutdown_in_progress) {
+        DLOG(TAG, "[%s] VFS shutdown in progress, cannot open file", __func__);
+        return 0;
+    }
+    
     // Use shared buffer to reduce stack allocation
     if (path_buffer_mutex && xSemaphoreTake(path_buffer_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        /* Recheck shutdown flag after acquiring mutex */
+        if (vfs_shutdown_in_progress) {
+            xSemaphoreGive(path_buffer_mutex);
+            DLOG(TAG, "[%s] VFS shutdown started, cannot open file", __func__);
+            return 0;
+        }
+        
         const char *p;
         get_file_path_width_base(shared_path_buffer, PATH_MAX_CHAR_SIZE, name, base);
         p = (*shared_path_buffer ? shared_path_buffer : name);
@@ -658,7 +736,13 @@ FILE *s_open_file(const char *name, const char *base, const char *mode) {
         }
         return f;
     } else {
-        // Fallback to stack buffer if mutex unavailable
+        // Fallback to stack buffer if mutex unavailable (during shutdown or not initialized)
+        /* Don't try to open files if VFS is shutting down */
+        if (vfs_shutdown_in_progress) {
+            DLOG(TAG, "[%s] VFS shutdown in progress, cannot open file", __func__);
+            return 0;
+        }
+        
         char path[PATH_MAX_CHAR_SIZE] = {0};
         const char *p;
         get_file_path_width_base(&(path[0]), PATH_MAX_CHAR_SIZE, name, base);
