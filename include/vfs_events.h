@@ -43,7 +43,7 @@ enum {
     VFS_EVENT_LIST(ENUM)
 };
 
- extern const char * const vfs_event_strings[];
+const char * vfs_event_strings(int id);
 
 #ifdef __cplusplus
 }

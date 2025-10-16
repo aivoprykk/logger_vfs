@@ -32,7 +32,14 @@
 #endif
 ESP_EVENT_DEFINE_BASE(VFS_EVENT);
 
-const char * const vfs_event_strings[] = { VFS_EVENT_LIST(STRINGIFY) };
+#if (C_LOG_LEVEL < 3)
+static const char * const _vfs_event_strings[] = { VFS_EVENT_LIST(STRINGIFY) };
+const char * vfs_event_strings(int id) {
+    return _vfs_event_strings[id];
+}
+#else
+const char * vfs_event_strings(int id) {return "VFS_EVENT";}
+#endif
 
 static const char *TAG = "vfs";
 static esp_timer_handle_t sd_timer = 0;
@@ -41,6 +48,7 @@ vfs_t vfs_ctx = VFS_DEDAULTS();
 static int do_space_print = 0;
 // Shared path buffer to reduce stack allocation
 static char shared_path_buffer[PATH_MAX_CHAR_SIZE];
+// Binary semaphore (not mutex) to avoid priority inheritance issues with timeouts
 static SemaphoreHandle_t path_buffer_mutex = NULL;
 static volatile bool vfs_shutdown_in_progress = false;  /* Track shutdown state separately */
 
@@ -85,7 +93,7 @@ esp_err_t write_speed(const char *name, const char * mount_point) {
     // ILOG(TAG, "[%s] file:%s", __FUNCTION__, name);
     FILE *f = s_open_file(name, mount_point, "w");
     if (f == NULL) {
-        ESP_LOGE(TAG, "Failed to open file for writing");
+        ELOG(TAG, "Failed to open file for writing");
         return ESP_FAIL;
     }
     uint64_t time_array[TIME_ARRAY_SIZE];
@@ -394,11 +402,16 @@ int vfs_init(void) {
     /* Clear shutdown flag at start of initialization */
     vfs_shutdown_in_progress = false;
     
-    // Initialize path buffer mutex for heap optimization
+    // Initialize path buffer semaphore for heap optimization
+    // Using binary semaphore instead of mutex to avoid FreeRTOS priority inheritance
+    // assertion failures when using timeouts (tasks.c:5261)
     if (!path_buffer_mutex) {
-        path_buffer_mutex = xSemaphoreCreateMutex();
+        path_buffer_mutex = xSemaphoreCreateBinary();
         if (!path_buffer_mutex) {
-            ELOG(TAG, "[%s] Failed to create path buffer mutex", __func__);
+            ELOG(TAG, "[%s] Failed to create path buffer semaphore", __func__);
+        } else {
+            // Binary semaphore starts in "taken" state, give it to make it available
+            xSemaphoreGive(path_buffer_mutex);
         }
     }
     
@@ -729,9 +742,7 @@ FILE *s_open_file(const char *name, const char *base, const char *mode) {
         xSemaphoreGive(path_buffer_mutex);
         
         if (f == NULL) {
-#if (C_LOG_LEVEL < 3)
             WLOG(TAG, "[%s] open '%s' failed '%s'.", __FUNCTION__, p, strerror(errno));
-#endif
             return 0;
         }
         return f;
@@ -749,9 +760,7 @@ FILE *s_open_file(const char *name, const char *base, const char *mode) {
         p = (*path ? path : name);
         FILE *f = fopen(p, mode);
         if (f == NULL) {
-#if (C_LOG_LEVEL < 3)
             WLOG(TAG, "[%s] open '%s' failed '%s'.", __FUNCTION__, p, strerror(errno));
-#endif
             return 0;
         }
         return f;
@@ -783,9 +792,7 @@ int s_open(const char *name, const char *base, const char *mode) {
     p = (*path ? path : name);
     int f = open(p, m);
     if (f < 0) {
-#if (C_LOG_LEVEL < 3)
         WLOG(TAG, "[%s] open '%s' failed: '%s'", __FUNCTION__, p, strerror(errno));
-#endif
         return -1;
     }
     return f;
@@ -800,9 +807,7 @@ esp_err_t s_remove_file(const char *name, const char *base) {
     get_file_path_width_base(&(path[0]), PATH_MAX_CHAR_SIZE, name, base);
     p = (*path ? path : name);
     if (unlink(p) < 0) {
-#if (C_LOG_LEVEL < 3)
         WLOG(TAG, "[%s] unlink '%s' failed: '%s'", __FUNCTION__, p, strerror(errno));
-#endif
         return ESP_FAIL;
     }
     return ESP_OK;
@@ -831,19 +836,13 @@ esp_err_t s_write(const char *name, const char *base, char *data, size_t len) {
     }
     int bytes = write(f, data, len ? len : strlen(data));
     if (bytes < 0) {
-#if (C_LOG_LEVEL < 3)
         WLOG(TAG, "Failed to write (%s) fd:%d", strerror(errno), f);
-#endif
     }
     if (fsync(f)) {
-#if (C_LOG_LEVEL < 3)
         WLOG(TAG, "Failed to sync (%s) fd:%d", strerror(errno), f);
-#endif
     }
     if (close(f)) {
-#if (C_LOG_LEVEL < 3)
         WLOG(TAG, "Failed to close (%s) fd:%d", strerror(errno), f);
-#endif
     }
     return bytes;
 }
@@ -859,47 +858,39 @@ char *s_read_from_file(const char *name, const char *base) {
         buffer = malloc(flength + 1 * sizeof(char));
         int err = read(f, buffer, sizeof(char) * flength);
         if (err < 0) {
-#if (C_LOG_LEVEL < 3)
             WLOG(TAG, "Failed to read (%s) fd:%d", strerror(errno), f);
-#endif
             free(buffer);
             buffer = 0;
         } else
             buffer[flength] = 0;
         if (close(f)) {
-#if (C_LOG_LEVEL < 3)
             WLOG(TAG, "Failed to close (%s)", strerror(errno));
-#endif
         }
     }
     return buffer;
 }
 
 int s_rename_file_n(const char *old, const char *new, uint8_t rmifexists) {
-    FUNC_ENTRY_ARGS(TAG, " %s %s", __FUNCTION__, old, new);
+    FUNC_ENTRY_ARGS(TAG, " %s %s", old, new);
     if (!old || !new)
         return -1;
     if (!s_xfile_exists(old))
         return -1;
     if (s_xfile_exists(new) && rmifexists) {
         if (unlink(new) < 0) {
-#if (C_LOG_LEVEL < 3)
             WLOG(TAG, "[%s] Failed to unlink (%s)", __FILE__, strerror(errno));
-#endif
             return -1;
         }
     }
     if (rename(old, new) < 0) {
-#if (C_LOG_LEVEL < 3)
         WLOG(TAG, "[%s] Failed to rename [%s to %s], (%s)", __FILE__, old, new, strerror(errno));
-#endif
         return -1;
     }
     return 0;
 }
 
 int s_rename_file(const char *old, const char *new, const char *base) {
-    FUNC_ENTRY_ARGS(TAG, " %s %s %s", __FUNCTION__, base ? base : "", old, new); 
+    FUNC_ENTRY_ARGS(TAG, " %s %s %s", base ? base : "", old, new); 
     if (!old || !new)
         return -1;
     char path[PATH_MAX_CHAR_SIZE] = {0};
