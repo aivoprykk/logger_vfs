@@ -26,13 +26,11 @@ static struct wl_context_s wl_ctx = WL_CONTEXT_INIT;
 static const char *TAG = "vfs_littlefs";
 
 int littlefs_init() {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
     /* Print chip information */
     esp_chip_info_t chip_info;
     esp_chip_info(&chip_info);
-#if (C_LOG_LEVEL < 2)
+#if (C_LOG_LEVEL <= LOG_DEBUG_NUM)
     printf("This is %s chip with %d CPU cores, WiFi%s%s, ",
             CONFIG_IDF_TARGET,
             chip_info.cores,
@@ -54,9 +52,7 @@ int littlefs_mount() {
         ESP_LOGW(TAG, "[%s] LittleFS partition not found", __func__);
         goto done;
     }
-#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Initializing LittleFS", __func__);
-#endif
     esp_vfs_littlefs_conf_t conf = {
             .base_path = wl_ctx.mount_point,
             .partition_label = wl_ctx.base_label,
@@ -90,9 +86,7 @@ int littlefs_mount() {
 }
 
 void littlefs_uninit() {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __func__);
-#endif
+    FUNC_ENTRY(TAG);
 }
 
 void littlefs_umount() {

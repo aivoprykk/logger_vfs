@@ -32,7 +32,7 @@
 #endif
 ESP_EVENT_DEFINE_BASE(VFS_EVENT);
 
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
 static const char * const _vfs_event_strings[] = { VFS_EVENT_LIST(STRINGIFY) };
 const char * vfs_event_strings(int id) {
     return _vfs_event_strings[id];
@@ -53,7 +53,7 @@ static SemaphoreHandle_t path_buffer_mutex = NULL;
 static volatile bool vfs_shutdown_in_progress = false;  /* Track shutdown state separately */
 
 static esp_err_t try_open_write(const char *name, const char * mount_point, void (*cb)(void*), void *arg) {
-    FUNC_ENTRY(TAG);
+    FUNC_ENTRYD(TAG);
     if (name == 0 || *name == 0)
         return ESP_FAIL;
         
@@ -136,7 +136,7 @@ esp_err_t write_speed(const char *name, const char * mount_point) {
 #endif
 
 static esp_err_t m_mount_x(vfs_config_t *p) {
-    FUNC_ENTRY(TAG);
+    FUNC_ENTRYD(TAG);
     int8_t j = 0, ret = 0;
     bool (*mounted)(void) = 0;
     int (*mount)(void) = 0, msg_mounted = 0, msg_mount_failed = 0, msg_write_failed = 0;
@@ -676,7 +676,7 @@ off_t s_xstat_file_size(int f) {
 }
 
 int get_file_path_width_base(char *topath, size_t pathlen, const char *name, const char *base) {
-    FUNC_ENTRY_ARGS(TAG, " %s %s", base ? base : "", name);
+    FUNC_ENTRY_ARGSD(TAG, " %s %s", base ? base : "", name);
     if(!topath) return 0;
     if(pathlen == 0) return 0;
     char *p = topath;
@@ -716,7 +716,7 @@ int get_file_path_width_base(char *topath, size_t pathlen, const char *name, con
 }
 
 FILE *s_open_file(const char *name, const char *base, const char *mode) {
-    FUNC_ENTRY_ARGS(TAG, "%s %s", base ? base : "", name);
+    FUNC_ENTRY_ARGSD(TAG, "%s %s", base ? base : "", name);
     if (name == 0 || name[0] == 0) return 0;
     if (mode == 0) mode = "rb";
     

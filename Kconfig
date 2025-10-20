@@ -303,6 +303,8 @@ menu "Logger Storage Module Configuration"
                 Specify how important log should be added.
             config LOGGER_VFS_LOG_LEVEL_TRACE
                 bool "TRACE: A lot of logs to give detailed information"
+            config LOGGER_VFS_LOG_LEVEL_DEBUG
+                bool "DEBUG: Log general debug info"
             config LOGGER_VFS_LOG_LEVEL_INFO
                 bool "INFO: Log important events"
             config LOGGER_VFS_LOG_LEVEL_WARN
@@ -317,10 +319,11 @@ menu "Logger Storage Module Configuration"
         config LOGGER_VFS_LOG_LEVEL
             int
             default 0 if LOGGER_VFS_LOG_LEVEL_TRACE
-            default 1 if LOGGER_VFS_LOG_LEVEL_INFO
-            default 2 if LOGGER_VFS_LOG_LEVEL_WARN
-            default 3 if LOGGER_VFS_LOG_LEVEL_ERROR
-            default 4 if LOGGER_VFS_LOG_LEVEL_USER
-            default 5 if LOGGER_VFS_LOG_LEVEL_NONE
+            default 1 if LOGGER_VFS_LOG_LEVEL_DEBUG
+            default 2 if LOGGER_VFS_LOG_LEVEL_INFO
+            default 3 if LOGGER_VFS_LOG_LEVEL_WARN
+            default 4 if LOGGER_VFS_LOG_LEVEL_ERROR
+            default 5 if LOGGER_VFS_LOG_LEVEL_USER
+            default 6 if LOGGER_VFS_LOG_LEVEL_NONE
     endif
 endmenu

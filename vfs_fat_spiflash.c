@@ -26,9 +26,7 @@ static const char *TAG = "vfs_fat_spiflash";
 
 int fatfs_init() {
     if(heap_caps_get_total_size(MALLOC_CAP_8BIT) < VFS_MIN_MEM_SIZE_FOR_FLASH_MOUNT) {
-#if (C_LOG_LEVEL < 4)
         WLOG(TAG, "[%s] Not enough mem (%u < 180000) to mount FATFS for this chip.", __func__, heap_caps_get_total_size(MALLOC_CAP_8BIT));
-#endif
         wl_ctx.available = 0;
         return ESP_ERR_NOT_SUPPORTED;
     }
@@ -42,17 +40,13 @@ int fatfs_mount() {
 #else
     int ro = 0;
 #endif
-#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Mounting FAT filesystem to mountpoint:%s, label:%s, %d", __func__, wl_ctx.mount_point, wl_ctx.base_label, ro);
-#endif
     // To mount device we need name of device partition, define mount_point
     // and allow format partition in case if it is new one and was not formatted
     // before
     esp_err_t ret = ESP_OK;
     if(has_fatfs_partition() == 0) {
-#if (C_LOG_LEVEL < 3)
         WLOG(TAG, "[%s] FATFS partition not found", __func__);
-#endif
         goto done;
     }
     const esp_vfs_fat_mount_config_t mount_config = {
@@ -81,9 +75,7 @@ int fatfs_mount() {
 }
 
 int fatfs_format(const char *mountpoint) {
-#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Formatting FAT filesystem on mount_point:%s, label:%s", __func__, wl_ctx.mount_point, wl_ctx.base_label);
-#endif
     // For now, only support the default mountpoint
     // const char * mp = wl_ctx.mount_point;
     // while(*mp=='/') ++mp;
@@ -99,13 +91,13 @@ int fatfs_format(const char *mountpoint) {
 }
 
 void fatfs_uninit() {
-#if C_LOG_LEVEL < 3
+#if C_LOG_LEVEL <= LOG_INFO_NUM
     ILOG(TAG, "[%s]", __func__);
 #endif
 }
 
 void fatfs_umount() {
-#if C_LOG_LEVEL < 3
+#if C_LOG_LEVEL <= LOG_INFO_NUM
     ILOG(TAG, "[%s]", __func__);
 #endif
     esp_err_t ret = ESP_OK;
@@ -119,7 +111,7 @@ void fatfs_umount() {
             ret = esp_vfs_fat_spiflash_unmount_ro(wl_ctx.mount_point, wl_ctx.base_label);
         else
             ret = esp_vfs_fat_spiflash_unmount_rw_wl(wl_ctx.mount_point, wl_ctx.volume_handle);
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
         if (ret == ESP_OK)
             ILOG(TAG, "[%s] Filesystem unmounted", __func__);
 #endif

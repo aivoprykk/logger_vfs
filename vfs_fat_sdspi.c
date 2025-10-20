@@ -55,9 +55,7 @@ typedef struct wl_context_s {
 static struct wl_context_s wl_ctx = WL_CONTEXT_INIT;
 
 static uint32_t init_host_frequency() {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __FUNCTION__);
-#endif
+    FUNC_ENTRY(TAG);
     assert(wl_ctx.volume_handle->max_freq_khz <= wl_ctx.volume_handle->host.max_freq_khz);
 
     /* Find highest frequency in the following list,
@@ -78,9 +76,7 @@ static uint32_t init_host_frequency() {
     for (int i = 0; i < n_freq_values; ++i) {
         uint32_t freq = freq_values[i];
         if (wl_ctx.volume_handle->max_freq_khz >= freq) {
-#if (C_LOG_LEVEL < 3)
             ILOG(TAG, "Set card max allowed frequency to %lu", freq);
-#endif
             selected_freq = freq;
             break;
         }
@@ -181,9 +177,7 @@ pin_configuration_t pin_test_config = {
 
 
 int sdcard_init(void) {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __FUNCTION__);
-#endif
+    FUNC_ENTRY(TAG);
     esp_err_t ret = ESP_OK;
 
     sdmmc_host_t lhost = SDSPI_HOST_DEFAULT();
@@ -219,9 +213,7 @@ int sdcard_init(void) {
 
 #if defined(CONFIG_SD_USE_SPI)
 
-#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Using SDSPI peripheral", __func__);
-#endif
 #if (CONFIG_SD_PIN_CLK >= 0)
         gpio_set_pull_mode(CONFIG_SD_PIN_CLK, GPIO_PULLUP_ONLY);
 #endif
@@ -243,9 +235,7 @@ int sdcard_init(void) {
         .max_transfer_sz = 4000,
     };
     memcpy(&wl_ctx.bus_cfg, &bus_cfg, sizeof(spi_bus_config_t));
-#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Initializing sdspi device at slot: %d", __func__, wl_ctx.host.slot);
-#endif
     ret = spi_bus_initialize(wl_ctx.host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK) {
         WLOG(TAG, "[%s] Failed to initialize sdspi device (%s).", __func__, esp_err_to_name(ret));
@@ -261,9 +251,7 @@ int sdcard_init(void) {
 
 #else
 
-#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Using SMMMC peripheral", __func__);
-#endif
 
     sdmmc_slot_config_t device_config = SDMMC_SLOT_CONFIG_DEFAULT();
 #if _IS_UHS1
@@ -293,9 +281,7 @@ int sdcard_init(void) {
 #endif
 
     esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_INIT_DONE, 0, 0, pdMS_TO_TICKS(100));
-#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] done", __func__);
-#endif
 #if defined(CONFIG_SD_USE_SPI)
     done:
 #endif
@@ -303,9 +289,7 @@ int sdcard_init(void) {
 }
 
 int sdcard_mount(void) {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __FUNCTION__);
-#endif
+    FUNC_ENTRY(TAG);
     esp_err_t ret = ESP_OK;
     // Options for mounting the filesystem.
     // If format_if_mount_failed is set to true, SD card will be partitioned and
@@ -316,9 +300,7 @@ int sdcard_mount(void) {
         .max_files = 5, // Need 5 for txtlog, ubxlog, sbplog, gpxlog + config files
         .allocation_unit_size = CONFIG_WL_SECTOR_SIZE,
         .disk_status_check_enable = false};
-#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Mounting SD FAT filesystem at %s", __func__, wl_ctx.mount_point);
-#endif
 
     // Add timeout protection for mount operation
     uint32_t start_time = esp_timer_get_time() / 1000; // Convert to ms
@@ -352,9 +334,7 @@ int sdcard_mount(void) {
     else {
         wl_ctx.mounted = 1;
     }
-#if (C_LOG_LEVEL < 3)
     ILOG(TAG, "[%s] Filesystem mounted at %s", __FUNCTION__, wl_ctx.mount_point);
-#endif
     if (!ret && wl_ctx.volume_handle) {
         // esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_MOUNTED, 0, 0, portMAX_DELAY);
         /* uint32_t f = init_host_frequency(volume_handle);
@@ -385,9 +365,7 @@ int sdcard_mount(void) {
 }
 
 void sdcard_umount(void) {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __FUNCTION__);
-#endif
+    FUNC_ENTRY(TAG);
     // All done, unmount partition and disable SDMMC peripheral
     if(wl_ctx.mounted) {
         if (!wl_ctx.volume_handle) {
@@ -396,7 +374,7 @@ void sdcard_umount(void) {
         }
         esp_err_t ret;
         ret = esp_vfs_fat_sdcard_unmount(wl_ctx.mount_point, wl_ctx.volume_handle);
-#if (C_LOG_LEVEL < 3)
+#if (C_LOG_LEVEL <= LOG_INFO_NUM)
         if (ret == ESP_OK)
             ILOG(TAG, "[%s] Card unmounted", __func__);
 #endif
@@ -407,9 +385,7 @@ void sdcard_umount(void) {
 }
 
 void sdcard_uninit(void) {
-#if (C_LOG_LEVEL < 3)
-    ILOG(TAG, "[%s]", __FUNCTION__);
-#endif
+    FUNC_ENTRY(TAG);
     esp_err_t ret;
 #if defined(CONFIG_SD_USE_SPI)
     spi_bus_free(wl_ctx.host.slot);
