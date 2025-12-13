@@ -183,6 +183,11 @@ int sdcard_init(void) {
     sdmmc_host_t lhost = SDSPI_HOST_DEFAULT();
     memcpy(&wl_ctx.host, &lhost, sizeof(sdmmc_host_t));
     wl_ctx.host.slot = SDCARD_HOST;
+    
+    // Set shorter timeouts to avoid blocking when no SD card is present
+    // Default is 60000ms (60s), reduce to 2000ms (2s)
+    wl_ctx.host.command_timeout_ms = 2000;
+    
     // By default, SD card frequency is initialized to SDMMC_FREQ_DEFAULT
     // (20MHz) For setting a specific frequency, use host.max_freq_khz (range
     // 400kHz - 40MHz for SDMMC) Example: for fixed frequency of 10MHz, use

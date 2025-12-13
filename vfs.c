@@ -30,6 +30,26 @@
 #include "vfs_littlefs.h"
 #include "esp_littlefs.h"
 #endif
+
+// Forward declarations for app mode checking
+typedef enum {
+    APP_MODE_UNKNOWN = 0,
+    APP_MODE_BOOT,
+    APP_MODE_WIFI,
+    APP_MODE_GPS,
+    APP_MODE_SLEEP,
+    APP_MODE_SHUT_DOWN,
+    APP_MODE_RESTART,
+    APP_MODE_CHARGE
+} app_mode_t;
+
+struct main_ctx_s {
+    app_mode_t app_mode;
+    // ... other fields not needed here
+};
+
+extern struct main_ctx_s m_app_ctx;
+
 ESP_EVENT_DEFINE_BASE(VFS_EVENT);
 
 #if (C_LOG_LEVEL <= LOG_INFO_NUM)
@@ -240,6 +260,12 @@ static esp_err_t m_mount_x(vfs_config_t *p) {
 static void my_mount_cb(void* arg) {
     FUNC_ENTRY(TAG);
     
+    /* Skip SD card mounting in charge mode to save power and reduce overhead */
+    if (m_app_ctx.app_mode == APP_MODE_CHARGE) {
+        DLOG(TAG, "[%s] Skipping SD mount in charge mode", __func__);
+        return;
+    }
+    
     /* Use path_buffer_mutex to coordinate with vfs_deinit() */
     /* Try to acquire mutex with no wait - if locked, shutdown is in progress */
     if (!path_buffer_mutex || xSemaphoreTake(path_buffer_mutex, 0) != pdTRUE) {
@@ -288,7 +314,13 @@ static void my_mount_cb(void* arg) {
         }
     }
     
-    if (!esp_timer_is_active(sd_timer)) {
+    // Don't start/keep timer running in charge mode to save power
+    if (m_app_ctx.app_mode == APP_MODE_CHARGE) {
+        if (sd_timer && esp_timer_is_active(sd_timer)) {
+            esp_timer_stop(sd_timer);
+            DLOG(TAG, "[%s] Stopped SD mount timer in charge mode", __func__);
+        }
+    } else if (!esp_timer_is_active(sd_timer)) {
         const esp_timer_create_args_t sd_timer_args = {
             .callback = &my_mount_cb,
             .name = "sd_mount",
@@ -479,6 +511,22 @@ int vfs_init(void) {
     // }
     vfs_ctx.vfs_initialized = 1;
     return ESP_OK;
+}
+
+void vfs_pause_monitoring(bool pause) {
+    if (pause) {
+        // Stop the periodic timer when entering charge mode or pausing
+        if (sd_timer && esp_timer_is_active(sd_timer)) {
+            esp_timer_stop(sd_timer);
+            ILOG(TAG, "[%s] SD mount timer paused", __func__);
+        }
+    } else {
+        // Resume the periodic timer when exiting charge mode
+        if (sd_timer && !esp_timer_is_active(sd_timer)) {
+            esp_timer_start_periodic(sd_timer, SEC_TO_US(2));
+            ILOG(TAG, "[%s] SD mount timer resumed", __func__);
+        }
+    }
 }
 
 int vfs_deinit(void) {

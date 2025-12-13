@@ -35,7 +35,15 @@ typedef struct vfs_config_s {
 #define REP4(str) REP2(str), REP2(str)
 #define REP6(str) REP3(str), REP3(str)
 
-#define VFS_CFG_DEFAULT() {REP6(0)}
+#define VFS_CFG_DEFAULT() { \
+    .mount_point = NULL, \
+    .total_bytes = 0, \
+    .free_bytes = 0, \
+    .used_bytes = 0, \
+    .is_mounted = 0, \
+    .write_attempts = 0, \
+    .part_type = VFS_PART_MAX, \
+}
 
 typedef struct vfs_s {
     vfs_config_t parts[VFS_MAX_PARTS];
@@ -54,6 +62,7 @@ extern vfs_t vfs_ctx;
 
 int vfs_init(void);
 int vfs_deinit(void);
+void vfs_pause_monitoring(bool pause);
 int vfs_select_part(uint8_t log_part_locked);
 int vfs_print_space(const char *mp, uint64_t total_bytes, uint64_t free_bytes, uint64_t used_bytes);
 int vfs_fs_space(const char * mp, uint8_t type, uint64_t *total_bytes, uint64_t *free_bytes, uint64_t *used_bytes);
