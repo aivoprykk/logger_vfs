@@ -60,6 +60,35 @@ REP2(VFS_PART_MAX) \
 
 extern vfs_t vfs_ctx;
 
+// Work-queue API for serialized filesystem operations (mount, open/close/flush files)
+typedef enum {
+    VFS_WORK_MOUNT_CHECK = 0,
+    VFS_WORK_OPEN_FILES,
+    VFS_WORK_CLOSE_FILES,
+    VFS_WORK_PARTITION_CHANGED,
+    VFS_WORK_FLUSH_FILES,
+    VFS_WORK_SAVE_SESSION,
+} vfs_work_type_t;
+
+typedef struct {
+    vfs_work_type_t type;
+    void *arg; // optional, e.g., gps_context_t*
+} vfs_work_item_t;
+
+// Post work to VFS worker queue (non-blocking). Returns ESP_OK on enqueue.
+esp_err_t vfs_post_work(vfs_work_type_t type, void *arg);
+
+// Work interface to decouple VFS from specific consumers (e.g., GPS)
+// Consumer provides a single processor callback that handles generic VFS work items.
+typedef struct vfs_work_if_s {
+    void (*process)(vfs_work_type_t type, void *arg);
+    void *ctx; // optional context passed when enqueue arg is NULL
+} vfs_work_if_t;
+
+// Register or unregister (pass NULL) the work interface with the VFS module
+void vfs_register_work_interface(const vfs_work_if_t *iface);
+
+
 int vfs_init(void);
 int vfs_deinit(void);
 void vfs_pause_monitoring(bool pause);

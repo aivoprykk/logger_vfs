@@ -31,6 +31,8 @@
 #include "esp_littlefs.h"
 #endif
 
+#include "esp_timer.h"
+
 // Forward declarations for app mode checking
 typedef enum {
     APP_MODE_UNKNOWN = 0,
@@ -50,12 +52,28 @@ struct main_ctx_s {
 
 extern struct main_ctx_s m_app_ctx;
 
+#define STRINGIFY_EVENT(x, y) STRINGIFY_(VFS_EVENT_ ## y ## _ ## x),
+
 ESP_EVENT_DEFINE_BASE(VFS_EVENT);
 
 #if (C_LOG_LEVEL <= LOG_INFO_NUM)
-static const char * const _vfs_event_strings[] = { VFS_EVENT_LIST(STRINGIFY) };
+static const char * const _vfs_event_strings[] = {
+#if defined(CONFIG_USE_SD_CARD)
+    VFS_EVENT_LIST(STRINGIFY_EVENT, SDCARD)
+#endif
+#if defined(CONFIG_USE_FATFS)
+    VFS_EVENT_LIST(STRINGIFY_EVENT, FAT_PARTITION)
+#endif
+#if defined(CONFIG_USE_LITTLEFS)
+    VFS_EVENT_LIST(STRINGIFY_EVENT, LITTEFS_PARTITION)
+#endif
+#if defined(CONFIG_USE_SPIFFS)
+    VFS_EVENT_LIST(STRINGIFY_EVENT, SPIFFS_PARTITION)
+#endif
+    "VFS_EVENT_LOG_PARTITION_CHANGED"
+};
 const char * vfs_event_strings(int id) {
-    return _vfs_event_strings[id];
+    return id < lengthof(_vfs_event_strings) ? _vfs_event_strings[id] : "VFS_EVENT_UNKNOWN";
 }
 #else
 const char * vfs_event_strings(int id) {return "VFS_EVENT";}
@@ -70,7 +88,48 @@ static int do_space_print = 0;
 static char shared_path_buffer[PATH_MAX_CHAR_SIZE];
 // Binary semaphore (not mutex) to avoid priority inheritance issues with timeouts
 static SemaphoreHandle_t path_buffer_mutex = NULL;
+// Compatibility: keep mount semaphore for parts of code that still reference it
+static SemaphoreHandle_t mount_sem = NULL;
+// Work queue for mount/file operations (single worker serializes long ops)
+static QueueHandle_t vfs_work_queue = NULL;
+static TaskHandle_t mount_task_handle = NULL;
+static bool mount_task_is_running = false;
 static volatile bool vfs_shutdown_in_progress = false;  /* Track shutdown state separately */
+
+/* Local spinlock for small critical sections (use portENTER/EXIT_CRITICAL to be explicit) */
+static portMUX_TYPE vfs_lock = portMUX_INITIALIZER_UNLOCKED;
+
+// Bitmask to track pending work items and avoid duplicates (coalescing)
+static volatile uint32_t vfs_pending_work_mask = 0;
+#define VFS_WORK_BIT(t) (1u << (uint32_t)(t))
+
+/* Per-work-type pending argument storage so repeated posts update the latest arg
+ * (coalescing with "latest wins" semantics). Size is conservative. */
+static void *vfs_pending_args[8] = {0};
+
+#if defined(CONFIG_GPS_LOG_ENABLED)
+/* Generic work interface registered by consumers (e.g., gps_log) to decouple VFS from modules. */
+struct gps_context_s;
+typedef struct vfs_work_if_s vfs_work_if_t; // from vfs.h
+static vfs_work_if_t g_vfs_iface = {0};
+
+void vfs_register_work_interface(const vfs_work_if_t *iface) {
+    portENTER_CRITICAL(&vfs_lock);
+    if (iface) {
+        g_vfs_iface = *iface; // copy by value
+    } else {
+        memset(&g_vfs_iface, 0, sizeof(g_vfs_iface));
+    }
+    portEXIT_CRITICAL(&vfs_lock);
+
+    if (iface) ILOG(TAG, "[vfs] work interface registered");
+    else ILOG(TAG, "[vfs] work interface unregistered");
+}
+#endif
+
+// Forward declare vfs_post_work for use in timer callback
+esp_err_t vfs_post_work(vfs_work_type_t type, void *arg);
+
 
 static esp_err_t try_open_write(const char *name, const char * mount_point, void (*cb)(void*), void *arg) {
     FUNC_ENTRYD(TAG);
@@ -257,85 +316,202 @@ static esp_err_t m_mount_x(vfs_config_t *p) {
     return ret >= 0 ? ESP_OK : ESP_FAIL;
 }
 
-static void my_mount_cb(void* arg) {
-    FUNC_ENTRY(TAG);
-    
-    /* Skip SD card mounting in charge mode to save power and reduce overhead */
-    if (m_app_ctx.app_mode == APP_MODE_CHARGE) {
-        DLOG(TAG, "[%s] Skipping SD mount in charge mode", __func__);
-        return;
-    }
-    
-    /* Use path_buffer_mutex to coordinate with vfs_deinit() */
-    /* Try to acquire mutex with no wait - if locked, shutdown is in progress */
-    if (!path_buffer_mutex || xSemaphoreTake(path_buffer_mutex, 0) != pdTRUE) {
-        DLOG(TAG, "[%s] Mutex unavailable, skipping callback", __func__);
-        return;
-    }
-    
-    /* Check if shutdown is in progress after acquiring lock */
-    if (vfs_shutdown_in_progress) {
-        xSemaphoreGive(path_buffer_mutex);
-        DLOG(TAG, "[%s] VFS shutdown in progress, exiting callback", __func__);
-        return;
-    }
-    
+/* Helper: Mount all configured partitions. Returns true if any mount succeeded. */
+static bool vfs_mount_all_parts(bool yield_on_each) {
     uint8_t i = 0;
-    bool space_update_needed = false;
+    bool any_success = false;
     
-    while(i < VFS_MAX_PARTS) {
-        switch(vfs_ctx.parts[i].part_type) {
+    while (i < VFS_MAX_PARTS) {
+        switch (vfs_ctx.parts[i].part_type) {
             case VFS_PART_SDCARD:
             case VFS_PART_FATFS:
             case VFS_PART_LITTLEFS:
-                if(m_mount_x(&vfs_ctx.parts[i]) == ESP_OK) {
-                    space_update_needed = true;
+                if (m_mount_x(&vfs_ctx.parts[i]) == ESP_OK) {
+                    any_success = true;
                 }
                 break;
             default:
                 break;
         }
         ++i;
+        if (yield_on_each) taskYIELD();
     }
-    
-    // Only update filesystem space if needed and defer heavy operations
-    if(space_update_needed) {
-        i = 0;
-        while(i < VFS_MAX_PARTS) {
-            if(vfs_ctx.parts[i].mount_point && vfs_ctx.parts[i].is_mounted) {
-                // Defer heavy vfs_fs_space operation - only call if really needed
-                if(vfs_ctx.parts[i].free_bytes == 0) {
-                    vfs_fs_space(vfs_ctx.parts[i].mount_point, vfs_ctx.parts[i].part_type, 
-                                &vfs_ctx.parts[i].total_bytes, &vfs_ctx.parts[i].free_bytes, 
-                                &vfs_ctx.parts[i].used_bytes);
-                }
-            }
-            ++i;
-        }
-    }
-    
-    // Don't start/keep timer running in charge mode to save power
+    return any_success;
+}
+
+static void my_mount_cb(void* arg) {
+    /* Timer context must stay short; enqueue mount-check work */
     if (m_app_ctx.app_mode == APP_MODE_CHARGE) {
         if (sd_timer && esp_timer_is_active(sd_timer)) {
             esp_timer_stop(sd_timer);
-            DLOG(TAG, "[%s] Stopped SD mount timer in charge mode", __func__);
         }
-    } else if (!esp_timer_is_active(sd_timer)) {
-        const esp_timer_create_args_t sd_timer_args = {
-            .callback = &my_mount_cb,
-            .name = "sd_mount",
-            .arg = 0
-        };
-        if(!esp_timer_create(&sd_timer_args, &sd_timer))
-            esp_timer_start_periodic(sd_timer, SEC_TO_US(2)); /// Increased to 2s to reduce overhead
-        else {
-            ELOG(TAG, "[%s] Failed to create vfs timer", __func__);
-        }
-        do_space_print = 0;
+        return;
     }
-    
-    /* Release mutex before exiting callback */
-    xSemaphoreGive(path_buffer_mutex);
+    // Non-blocking enqueue - ignore if queue full
+    vfs_post_work(VFS_WORK_MOUNT_CHECK, NULL);
+}
+
+static void vfs_mount_worker(void *arg) {
+    FUNC_ENTRYD(TAG);
+    mount_task_is_running = true;
+    vfs_work_item_t item;
+
+    while (mount_task_is_running) {
+        if (!vfs_work_queue) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        // Wait for next work item
+        if (xQueueReceive(vfs_work_queue, &item, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+
+        if (vfs_shutdown_in_progress) {
+            break;
+        }
+
+        /* Take any updated argument that may have been coalesced by vfs_post_work().
+         * Coalescing policy: latest arg wins. */
+        portENTER_CRITICAL(&vfs_lock);
+        void *latest_arg = NULL;
+        if ((uint32_t)item.type < (sizeof(vfs_pending_args)/sizeof(vfs_pending_args[0]))) {
+            latest_arg = vfs_pending_args[item.type];
+            vfs_pending_args[item.type] = NULL;
+        }
+        portEXIT_CRITICAL(&vfs_lock);
+
+        switch (item.type) {
+            case VFS_WORK_MOUNT_CHECK: {
+                // Short critical section protected by path buffer mutex
+                if (!path_buffer_mutex || xSemaphoreTake(path_buffer_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+                    break;
+                }
+                bool space_update_needed = vfs_mount_all_parts(true);
+                if (space_update_needed) {
+                    uint8_t i = 0;
+                    while (i < VFS_MAX_PARTS) {
+                        if (vfs_ctx.parts[i].mount_point && vfs_ctx.parts[i].is_mounted && vfs_ctx.parts[i].free_bytes == 0) {
+                            vfs_fs_space(vfs_ctx.parts[i].mount_point, vfs_ctx.parts[i].part_type,
+                                         &vfs_ctx.parts[i].total_bytes, &vfs_ctx.parts[i].free_bytes,
+                                         &vfs_ctx.parts[i].used_bytes);
+                        }
+                        ++i;
+                        taskYIELD();
+                    }
+                }
+                xSemaphoreGive(path_buffer_mutex);
+                break;
+            }
+            case VFS_WORK_OPEN_FILES: {
+#if defined(CONFIG_GPS_LOG_ENABLED)
+                struct gps_context_s *gps = (struct gps_context_s*)latest_arg;
+                void *ctx = gps ? gps : g_vfs_iface.ctx;
+                if (!ctx) {
+                    WLOG(TAG, "[vfs_worker] OPEN_FILES: no context provided, skipping");
+                    break;
+                }
+                ILOG(TAG, "[vfs_worker] OPEN_FILES requested");
+                {
+                    vfs_work_if_t local_iface;
+                    portENTER_CRITICAL(&vfs_lock);
+                    local_iface = g_vfs_iface;
+                    portEXIT_CRITICAL(&vfs_lock);
+                    if (local_iface.process) local_iface.process(VFS_WORK_OPEN_FILES, ctx);
+                }
+#endif
+                break;
+            }
+            case VFS_WORK_FLUSH_FILES: {
+#if defined(CONFIG_GPS_LOG_ENABLED)
+                struct gps_context_s *gps = (struct gps_context_s*)latest_arg;
+                void *ctx = gps ? gps : g_vfs_iface.ctx;
+                if (!ctx) {
+                    WLOG(TAG, "[vfs_worker] FLUSH_FILES: no context provided, skipping");
+                    break;
+                }
+                DLOG(TAG, "[vfs_worker] FLUSH_FILES requested");
+                {
+                    vfs_work_if_t local_iface;
+                    portENTER_CRITICAL(&vfs_lock);
+                    local_iface = g_vfs_iface;
+                    portEXIT_CRITICAL(&vfs_lock);
+                    if (local_iface.process) local_iface.process(VFS_WORK_FLUSH_FILES, ctx);
+                }
+#endif
+                break;
+            }
+            case VFS_WORK_CLOSE_FILES: {
+#if defined(CONFIG_GPS_LOG_ENABLED)
+                struct gps_context_s *gps = (struct gps_context_s*)latest_arg;
+                void *ctx = gps ? gps : g_vfs_iface.ctx;
+                if (!ctx) {
+                    WLOG(TAG, "[vfs_worker] CLOSE_FILES: no context provided, skipping");
+                    break;
+                }
+                ILOG(TAG, "[vfs_worker] CLOSE_FILES requested");
+                {
+                    vfs_work_if_t local_iface;
+                    portENTER_CRITICAL(&vfs_lock);
+                    local_iface = g_vfs_iface;
+                    portEXIT_CRITICAL(&vfs_lock);
+                    if (local_iface.process) local_iface.process(VFS_WORK_CLOSE_FILES, ctx);
+                }
+#endif
+                break;
+            }
+            case VFS_WORK_PARTITION_CHANGED: {
+#if defined(CONFIG_GPS_LOG_ENABLED)
+                struct gps_context_s *gps = (struct gps_context_s*)latest_arg;
+                void *ctx = gps ? gps : g_vfs_iface.ctx;
+                if (!ctx) {
+                    WLOG(TAG, "[vfs_worker] PARTITION_CHANGED: no context provided, skipping");
+                    break;
+                }
+                ILOG(TAG, "[vfs_worker] PARTITION_CHANGED requested");
+                {
+                    vfs_work_if_t local_iface;
+                    portENTER_CRITICAL(&vfs_lock);
+                    local_iface = g_vfs_iface;
+                    portEXIT_CRITICAL(&vfs_lock);
+                    if (local_iface.process) local_iface.process(VFS_WORK_PARTITION_CHANGED, ctx);
+                }
+#endif
+                break;
+            }
+            case VFS_WORK_SAVE_SESSION: {
+#if defined(CONFIG_GPS_LOG_ENABLED)
+                struct gps_context_s *gps = (struct gps_context_s*)latest_arg;
+                void *ctx = gps ? gps : g_vfs_iface.ctx;
+                if (!ctx) {
+                    WLOG(TAG, "[vfs_worker] SAVE_SESSION: no context provided, skipping");
+                    break;
+                }
+                ILOG(TAG, "[vfs_worker] SAVE_SESSION requested");
+                {
+                    vfs_work_if_t local_iface;
+                    portENTER_CRITICAL(&vfs_lock);
+                    local_iface = g_vfs_iface;
+                    portEXIT_CRITICAL(&vfs_lock);
+                    if (local_iface.process) local_iface.process(VFS_WORK_SAVE_SESSION, ctx);
+                }
+#endif
+                break;
+            }
+            default:
+                break;
+        }
+
+        // Clear pending flag for this work item now that it's handled (allow requeue)
+        portENTER_CRITICAL(&vfs_lock);
+        vfs_pending_work_mask &= ~VFS_WORK_BIT(item.type);
+        portEXIT_CRITICAL(&vfs_lock);
+    }
+
+    /* Allow task delete from deinit without double-free */
+    FUNC_ENTRY_ARGSD(TAG, "Mount worker task exiting");
+    mount_task_handle = NULL;
+    vTaskDelete(NULL);
 }
 
 const vfs_config_t * vfs_get_part(const char * mount_point) {
@@ -446,6 +622,14 @@ int vfs_init(void) {
             xSemaphoreGive(path_buffer_mutex);
         }
     }
+
+    // Mount worker synchronization
+    if (!mount_sem) {
+        mount_sem = xSemaphoreCreateBinary();
+        if (!mount_sem) {
+            ELOG(TAG, "[%s] Failed to create mount semaphore", __func__);
+        }
+    }
     
     while(i < VFS_PART_MAX) {
         j = 0, k = 0;
@@ -495,9 +679,40 @@ int vfs_init(void) {
         }
         ++i;
     }
-    if(k) {
+    if (k && mount_sem) {
+        // Do initial mount synchronously to initialize vfs_ctx before returning
+        vfs_mount_all_parts(false);
+        vfs_select_part(0);  // Initialize partition selection with initial mount results
+
+        // Create work queue and start worker task for mount / file ops
+        if (!vfs_work_queue) {
+            vfs_work_queue = xQueueCreate(8, sizeof(vfs_work_item_t));
+            if (!vfs_work_queue) {
+                ELOG(TAG, "[%s] Failed to create vfs work queue", __func__);
+            }
+        }
+
+        if (!mount_task_handle) {
+            if (xTaskCreate(vfs_mount_worker, "vfs_worker", 4096, NULL, tskIDLE_PRIORITY + 1, &mount_task_handle) != pdPASS) {
+                ELOG(TAG, "[%s] Failed to create mount worker task", __func__);
+            }
+        }
+
+        // Start periodic timer that enqueues mount-check work
+        if (!sd_timer) {
+            const esp_timer_create_args_t sd_timer_args = {
+                .callback = &my_mount_cb,
+                .name = "sd_mount",
+                .arg = 0
+            };
+            if (!esp_timer_create(&sd_timer_args, &sd_timer)) {
+                esp_timer_start_periodic(sd_timer, SEC_TO_US(2)); // 2s
+            } else {
+                ELOG(TAG, "[%s] Failed to create vfs timer", __func__);
+            }
+        }
+
         ++do_space_print;
-        my_mount_cb(0);
     }
     // const esp_timer_create_args_t timer_args = {
     //     .callback = vfs_update_space,
@@ -518,20 +733,65 @@ void vfs_pause_monitoring(bool pause) {
         // Stop the periodic timer when entering charge mode or pausing
         if (sd_timer && esp_timer_is_active(sd_timer)) {
             esp_timer_stop(sd_timer);
-            ILOG(TAG, "[%s] SD mount timer paused", __func__);
+            FUNC_ENTRY_ARGS(TAG, "SD mount timer paused");
         }
     } else {
         // Resume the periodic timer when exiting charge mode
         if (sd_timer && !esp_timer_is_active(sd_timer)) {
             esp_timer_start_periodic(sd_timer, SEC_TO_US(2));
-            ILOG(TAG, "[%s] SD mount timer resumed", __func__);
+            FUNC_ENTRY_ARGS(TAG, "SD mount timer resumed");
         }
+    }
+}
+
+/**
+ * @brief Suspend VFS mount monitoring for maintenance operations (format, etc.)
+ * @return true if successfully suspended, false if VFS not initialized
+ * 
+ * Stops the timer and acquires the path_buffer_mutex to ensure worker is idle.
+ * Must be paired with vfs_resume_from_maintenance().
+ */
+bool vfs_suspend_for_maintenance(void) {
+    if (!vfs_ctx.vfs_initialized) {
+        return false;
+    }
+    
+    // Stop timer to prevent new worker wakeups
+    if (sd_timer && esp_timer_is_active(sd_timer)) {
+        esp_timer_stop(sd_timer);
+    }
+    
+    // Acquire mutex to wait for worker to finish current iteration
+    if (path_buffer_mutex && xSemaphoreTake(path_buffer_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        FUNC_ENTRY_ARGS(TAG, "VFS suspended for maintenance");
+        return true;
+    }
+    
+    ELOG(TAG, "[%s] Failed to acquire mutex for maintenance", __func__);
+    return false;
+}
+
+/**
+ * @brief Resume VFS mount monitoring after maintenance operations
+ * 
+ * Releases the path_buffer_mutex and restarts the periodic timer.
+ */
+void vfs_resume_from_maintenance(void) {
+    // Release mutex
+    if (path_buffer_mutex) {
+        xSemaphoreGive(path_buffer_mutex);
+    }
+    
+    // Restart timer
+    if (vfs_ctx.vfs_initialized && sd_timer && !esp_timer_is_active(sd_timer)) {
+        esp_timer_start_periodic(sd_timer, SEC_TO_US(2));
+        FUNC_ENTRY_ARGS(TAG, "VFS resumed after maintenance");
     }
 }
 
 int vfs_deinit(void) {
     if (!vfs_ctx.vfs_initialized) return ESP_OK;
-    
+
     /* Step 1: Acquire mutex to prevent timer callbacks from running */
     /* This blocks until any active callback completes */
     bool mutex_acquired = false;
@@ -541,13 +801,13 @@ int vfs_deinit(void) {
             ELOG(TAG, "[%s] Failed to acquire mutex for shutdown", __func__);
         }
     }
-    
+
     /* Step 2: Set shutdown flag to prevent new callbacks from running */
     vfs_shutdown_in_progress = true;
-    
+
     /* Step 3: Mark VFS as not initialized */
     vfs_ctx.vfs_initialized = 0;
-    
+
     /* Step 4: Stop and delete timers while holding mutex */
     /* Timer callbacks check shutdown flag after acquiring mutex, so they'll exit */
     if (sd_timer) {
@@ -557,7 +817,7 @@ int vfs_deinit(void) {
         esp_timer_delete(sd_timer);
         sd_timer = NULL;
     }
-    
+
     if (fs_size_timer) {
         if (esp_timer_is_active(fs_size_timer)) {
             esp_timer_stop(fs_size_timer);
@@ -565,10 +825,27 @@ int vfs_deinit(void) {
         esp_timer_delete(fs_size_timer);
         fs_size_timer = NULL;
     }
-    
+
+    /* Stop mount worker */
+    mount_task_is_running = false;
+    if (vfs_work_queue) {
+        /* Enqueue a sentinel to wake the worker so it can exit cleanly */
+        vfs_work_item_t stop_item = { .type = VFS_WORK_MOUNT_CHECK, .arg = NULL };
+        xQueueSend(vfs_work_queue, &stop_item, pdMS_TO_TICKS(10));
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+    if (mount_task_handle) {
+        vTaskDelete(mount_task_handle);
+        mount_task_handle = NULL;
+    }
+    if (vfs_work_queue) {
+        vQueueDelete(vfs_work_queue);
+        vfs_work_queue = NULL;
+    }
+
     /* Step 4: Small delay to ensure timer deletion completes */
     vTaskDelay(pdMS_TO_TICKS(10));
-    
+
     /* Step 5: Now safe to unmount filesystems - no callbacks can access them */
 #ifdef CONFIG_USE_SD_CARD
     if(sdcard_is_mounted()) {
@@ -594,27 +871,78 @@ int vfs_deinit(void) {
     }
     littlefs_uninit();
 #endif
-    
+
     /* Step 6: Release mutex and delete it last */
     if (mutex_acquired && path_buffer_mutex) {
         xSemaphoreGive(path_buffer_mutex);
     }
-    
+
     if (path_buffer_mutex) {
         vSemaphoreDelete(path_buffer_mutex);
         path_buffer_mutex = NULL;
     }
-    
+
+    if (mount_sem) {
+        vSemaphoreDelete(mount_sem);
+        mount_sem = NULL;
+    }
+
     /* Clear shutdown flag to allow re-initialization */
     vfs_shutdown_in_progress = false;
-    
+
+    /* Clear any pending work mask to avoid stale coalescing bits */
+    portENTER_CRITICAL(&vfs_lock);
+    vfs_pending_work_mask = 0;
+    /* also clear any pending args */
+    for (size_t _i = 0; _i < sizeof(vfs_pending_args)/sizeof(vfs_pending_args[0]); ++_i) vfs_pending_args[_i] = NULL;
+    portEXIT_CRITICAL(&vfs_lock);
+
     return ESP_OK;
 }
 
+// Post VFS work to the worker queue (non-blocking). Returns ESP_OK on success.
+esp_err_t vfs_post_work(vfs_work_type_t type, void *arg) {
+    if (!vfs_work_queue) return ESP_FAIL;
+
+    uint32_t bit = VFS_WORK_BIT(type);
+    // Avoid duplicate work: if bit already set, coalesce and return success
+    portENTER_CRITICAL(&vfs_lock);
+    if (vfs_pending_work_mask & bit) {
+        /* Already pending: update the stored arg so the worker will handle the latest
+         * argument when it processes this work item (latest-wins coalescing). */
+        vfs_pending_args[type] = arg;
+        portEXIT_CRITICAL(&vfs_lock);
+        DLOG(TAG, "[%s] Work %d already pending, updated arg", __func__, type);
+        return ESP_OK; // consider as success (already queued or processing)
+    }
+    /* Not pending yet: mark pending and store arg */
+    vfs_pending_work_mask |= bit;
+    vfs_pending_args[type] = arg;
+    portEXIT_CRITICAL(&vfs_lock);
+
+    vfs_work_item_t item = { .type = type, .arg = arg };
+    if (xQueueSend(vfs_work_queue, &item, 0) == pdTRUE) return ESP_OK;
+    if (xQueueSendToBack(vfs_work_queue, &item, pdMS_TO_TICKS(10)) == pdTRUE) return ESP_OK;
+
+    // failed to enqueue, clear pending bit and arg
+    portENTER_CRITICAL(&vfs_lock);
+    vfs_pending_work_mask &= ~bit;
+    vfs_pending_args[type] = NULL;
+    portEXIT_CRITICAL(&vfs_lock);
+
+    WLOG(TAG, "[%s] vfs work queue full", __func__);
+    return ESP_FAIL;
+}
+
+    
+
+
 static const char * const down_str[] = {"b", "Kb", "Mb", "Gb"};
+#if (C_LOG_LEVEL <= LOG_WARN_NUM)
 static const char * const strs[] = {
     "Failed to get partition information"
 };
+#endif
 
 static int vfs_mp_str(uint64_t b, char *buf) {
     if(!buf) return ESP_FAIL;

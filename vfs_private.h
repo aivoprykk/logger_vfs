@@ -6,6 +6,7 @@ extern "C" {
 #endif
 
 #include <stddef.h>
+#include <stdbool.h>
 #include <sys/types.h>
 #include <errno.h>
 
@@ -31,6 +32,8 @@ int has_spiffs_partition();
 int has_littlefs_partition();
 int write_speed(const char *name, const char * mount_point);
 int s_remove_file(const char *name, const char *base);
+bool vfs_suspend_for_maintenance(void);
+void vfs_resume_from_maintenance(void);
 
 #ifdef __cplusplus
 }

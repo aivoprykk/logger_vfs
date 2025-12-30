@@ -83,10 +83,41 @@ int fatfs_format(const char *mountpoint) {
         ESP_LOGE(TAG, "Unsupported mountpoint for format: %s", mountpoint);
         return ESP_ERR_INVALID_ARG;
     }
-    esp_err_t ret = esp_vfs_fat_spiflash_format_rw_wl(wl_ctx.mount_point, wl_ctx.base_label);
+    
+    esp_err_t ret = ESP_OK;
+    bool was_mounted = wl_ctx.mounted;
+    
+    // Suspend VFS monitoring to prevent interference during format
+    bool suspended = vfs_suspend_for_maintenance();
+    
+    // Unmount if currently mounted
+    if (was_mounted) {
+        ILOG(TAG, "[%s] Unmounting before format", __func__);
+        fatfs_umount();
+    }
+    
+    // Perform format
+    ret = esp_vfs_fat_spiflash_format_rw_wl(wl_ctx.mount_point, wl_ctx.base_label);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to format FAT filesystem. (%s)", esp_err_to_name(ret));
+    } else {
+        ILOG(TAG, "[%s] Format successful", __func__);
     }
+    
+    // Remount if it was mounted before
+    if (was_mounted && ret == ESP_OK) {
+        ILOG(TAG, "[%s] Remounting after format", __func__);
+        esp_err_t mount_ret = fatfs_mount();
+        if (mount_ret != ESP_OK) {
+            ELOG(TAG, "[%s] Failed to remount after format (%s)", __func__, esp_err_to_name(mount_ret));
+        }
+    }
+    
+    // Resume VFS monitoring
+    if (suspended) {
+        vfs_resume_from_maintenance();
+    }
+    
     return ret;
 }
 
