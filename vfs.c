@@ -221,6 +221,10 @@ static esp_err_t m_mount_x(vfs_config_t *p) {
     int (*mount)(void) = 0, msg_mounted = 0, msg_mount_failed = 0, msg_write_failed = 0;
     void (*umount)(void) = 0;
     if(!p || p->part_type >= VFS_PART_MAX || !p->mount_point) return ESP_FAIL;
+
+    // Index of the partition within vfs_ctx.parts (for routing decisions)
+    int part_idx = (int)(p - vfs_ctx.parts);
+    if (part_idx < 0 || part_idx >= VFS_MAX_PARTS) return ESP_FAIL;
 #ifdef CONFIG_USE_FATFS
     if(p->part_type == VFS_PART_FATFS) {
         mounted = fatfs_is_mounted;
@@ -290,6 +294,21 @@ static esp_err_t m_mount_x(vfs_config_t *p) {
     }
     if(ret == -2) {
         p->write_attempts++;
+
+        // Only trigger reselection and events if this failing partition is the active log target
+        bool is_current_log_part = (vfs_ctx.gps_log_part == part_idx);
+
+        if (is_current_log_part) {
+            // Attempt to find alternative log partition if current one failed to write
+            vfs_select_part(0);
+
+            // If still the same or no alternative, notify failure
+            if (vfs_ctx.gps_log_part == part_idx) {
+                esp_event_post(VFS_EVENT, msg_write_failed, NULL, 0, pdMS_TO_TICKS(100));
+            }
+        }
+
+        // Backoff/unmount after several failed attempts regardless of selection
         if(p->write_attempts > 3) {
             umount();
             goto umnt;
@@ -301,15 +320,20 @@ static esp_err_t m_mount_x(vfs_config_t *p) {
             p->write_attempts = 0;
         }
         p->is_mounted = ret > 0 ? 1 : 0;
-        if(ret != -1)
+
+        // Only trigger partition selection when this partition is relevant (current log part)
+        if(ret != -1 && vfs_ctx.gps_log_part == part_idx) {
             vfs_select_part(0);
+        }
+
         if(ret == 1) {
             esp_event_post(VFS_EVENT, msg_mounted, NULL, 0, pdMS_TO_TICKS(100));
         }
         else if(ret == -1) {
             esp_event_post(VFS_EVENT, msg_mount_failed, NULL, 0, pdMS_TO_TICKS(100));
         }
-        else if(ret == -2) {
+        else if(ret == -2 && vfs_ctx.gps_log_part == part_idx) {
+            // Only post write_failed if this is the active log partition
             esp_event_post(VFS_EVENT, msg_write_failed, NULL, 0, pdMS_TO_TICKS(100));
         }
     }
@@ -986,7 +1010,7 @@ void vfs_update_space(void*arg) {
 }
 
 int vfs_space_str(char*arg, size_t arglen) {
-    FUNC_ENTRY(TAG);
+    FUNC_ENTRYD(TAG);
     uint8_t i = vfs_ctx.gps_log_part;
     size_t len = 0;
     const char *p = arg;
