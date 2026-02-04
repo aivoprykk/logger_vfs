@@ -5,13 +5,13 @@
 
 #include <string.h>
 
-#include "driver/sdmmc_host.h"
+// #include "driver/sdmmc_host.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
-#include "driver/spi_master.h"
+// #include "driver/spi_master.h"
 #include "esp_vfs_fat.h"
 #include "esp_timer.h"
-#include "sdmmc_cmd.h"
+// #include "sdmmc_cmd.h"
 #ifdef CONFIG_DEBUG_PIN_CONNECTIONS
 #include "test_io.h"
 #endif
@@ -56,7 +56,7 @@ static struct wl_context_s wl_ctx = WL_CONTEXT_INIT;
 
 static uint32_t init_host_frequency() {
     FUNC_ENTRY(TAG);
-    assert(wl_ctx.volume_handle->max_freq_khz <= wl_ctx.volume_handle->host.max_freq_khz);
+    // assert(wl_ctx.volume_handle->max_freq_khz <= wl_ctx.volume_handle->host.max_freq_khz);
 
     /* Find highest frequency in the following list,
      * which is below volume_handle->max_freq_khz.
@@ -76,7 +76,7 @@ static uint32_t init_host_frequency() {
     for (int i = 0; i < n_freq_values; ++i) {
         uint32_t freq = freq_values[i];
         if (wl_ctx.volume_handle->max_freq_khz >= freq) {
-            ILOG(TAG, "Set card max allowed frequency to %lu", freq);
+            ILOG(TAG, "Set card max allowed frequency to %" PRIu32 "", freq);
             selected_freq = freq;
             break;
         }
@@ -318,7 +318,7 @@ int sdcard_mount(void) {
 
     uint32_t mount_time = (esp_timer_get_time() / 1000) - start_time;
     if (mount_time > 5000) {  // Log if mount took longer than 5 seconds
-        WLOG(TAG, "[%s] Mount operation took %lu ms", __func__, mount_time);
+        WLOG(TAG, "[%s] Mount operation took %" PRIu32 " ms", __func__, mount_time);
     }
 
     vTaskDelay(pdMS_TO_TICKS(20)); // Reduced from 50ms to 20ms

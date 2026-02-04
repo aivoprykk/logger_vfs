@@ -282,7 +282,7 @@ static esp_err_t m_mount_x(vfs_config_t *p) {
         }
         else {
             FUNC_ENTRY_ARGS(TAG, " Failed to mount part");
-            ret = -1;
+            ret = p->part_type == VFS_PART_FATFS ? ret : -1;
         }
     }
     else {
@@ -583,16 +583,16 @@ int vfs_select_part(uint8_t log_part_loked) {
         }
         if(vfs_ctx.parts[i].is_mounted) {
             vfs_fs_space(vfs_ctx.parts[i].mount_point, vfs_ctx.parts[i].part_type, &vfs_ctx.parts[i].total_bytes, &vfs_ctx.parts[i].free_bytes, &vfs_ctx.parts[i].used_bytes);
-            FUNC_ENTRY_ARGS(TAG, " part: %hhu, mountpoint: %s", i, vfs_ctx.parts[i].mount_point);
+            FUNC_ENTRY_ARGS(TAG, " part: %" PRIu8 ", mountpoint: %s", i, vfs_ctx.parts[i].mount_point);
             if(vfs_ctx.config_part == VFS_PART_MAX) {
-                FUNC_ENTRY_ARGS(TAG, " Config part: %hhu, mountpoint: %s", i, vfs_ctx.parts[i].mount_point);
+                FUNC_ENTRY_ARGS(TAG, " Config part: %" PRIu8 ", mountpoint: %s", i, vfs_ctx.parts[i].mount_point);
                 vfs_ctx.config_part = i;
             }
             // if((vfs_ctx.gps_log_part == VFS_PART_MAX || free_size < vfs_ctx.parts[i].free_bytes)) {
                 // free_size = vfs_ctx.parts[i].free_bytes;
             if(vfs_ctx.gps_log_part == VFS_PART_MAX || (!log_part_loked && vfs_ctx.parts[vfs_ctx.gps_log_part].free_bytes < vfs_ctx.parts[i].free_bytes)) {
                 // if(vfs_ctx.parts[i].free_bytes > 9000000) { // 10MB
-                FUNC_ENTRY_ARGS(TAG, " GPS log part: %hhu, mountpoint: %s", i, vfs_ctx.parts[i].mount_point);
+                FUNC_ENTRY_ARGS(TAG, " GPS log part: %" PRIu8 ", mountpoint: %s", i, vfs_ctx.parts[i].mount_point);
                 vfs_ctx.gps_log_part = i;
                 esp_event_post(VFS_EVENT, VFS_EVENT_LOG_PARTITION_CHANGED, NULL, 0, pdMS_TO_TICKS(100));
             }
@@ -602,9 +602,9 @@ int vfs_select_part(uint8_t log_part_loked) {
             //     strbf_put_path(&pathbuf, "/www");
             //     strbf_finish(&pathbuf);
             //     statok = stat(pathbuf.start, &sb);
-            //     ILOG(TAG, "[%s] Try web part: %hhu, path: %s, statok: %d", __func__, i, pathbuf.start, statok);
+            //     ILOG(TAG, "[%s] Try web part: %" PRIu8 ", path: %s, statok: %d", __func__, i, pathbuf.start, statok);
             //     if (!statok && S_ISDIR(sb.st_mode)) {
-            //         ILOG(TAG, "[%s] Web part: %hhu, ", __func__, i);
+            //         ILOG(TAG, "[%s] Web part: %" PRIu8 ", ", __func__, i);
             //         vfs_ctx.web_part = i;
             //     }
             //     strbf_shape(&pathbuf, 0);
@@ -936,7 +936,7 @@ esp_err_t vfs_post_work(vfs_work_type_t type, void *arg) {
          * argument when it processes this work item (latest-wins coalescing). */
         vfs_pending_args[type] = arg;
         portEXIT_CRITICAL(&vfs_lock);
-        DLOG(TAG, "[%s] Work %d already pending, updated arg", __func__, type);
+        FUNC_ENTRY_ARGSD(TAG, " Work %d already pending, updated arg", type);
         return ESP_OK; // consider as success (already queued or processing)
     }
     /* Not pending yet: mark pending and store arg */
@@ -1014,6 +1014,9 @@ int vfs_space_str(char*arg, size_t arglen) {
     uint8_t i = vfs_ctx.gps_log_part;
     size_t len = 0;
     const char *p = arg;
+    if(i >= VFS_MAX_PARTS) { 
+        goto end;
+    }
     // while(i<VFS_MAX_PARTS) {
         if(vfs_ctx.parts[i].mount_point && vfs_ctx.parts[i].is_mounted) {
             // if(i > 0) {
@@ -1029,13 +1032,14 @@ int vfs_space_str(char*arg, size_t arglen) {
         }
     //    ++i;
     // }
+    end:
     *arg = 0;
     return (arg - p);
 }
 
 int vfs_fs_space(const char * mp, uint8_t type, uint64_t *total_bytes, uint64_t *free_bytes, uint64_t *used_bytes) {
     FUNC_ENTRY(TAG);
-    assert(total_bytes && used_bytes && free_bytes);
+    // assert(total_bytes && used_bytes && free_bytes);
     esp_err_t ret;
 #if defined(CONFIG_USE_SD_CARD) || defined(CONFIG_USE_FATFS)
     ret = esp_vfs_fat_info(mp, total_bytes, free_bytes);

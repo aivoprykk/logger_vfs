@@ -6,10 +6,10 @@
 #include "esp_vfs_fat.h"
 
 #include "vfs_events.h"
-#include "hal/efuse_hal.h"
+// #include "hal/efuse_hal.h"
 
 typedef struct wl_context_s {
-    uint8_t mounted;
+    int8_t mounted;
     const char *mount_point;
     const char *base_label;
     wl_handle_t volume_handle;
@@ -24,7 +24,7 @@ static const char *TAG = "vfs_fat_spiflash";
 
 #define FATFS_LONG_NAMES 1
 
-int fatfs_init() {
+int fatfs_init(void) {
     if(heap_caps_get_total_size(MALLOC_CAP_8BIT) < VFS_MIN_MEM_SIZE_FOR_FLASH_MOUNT) {
         WLOG(TAG, "[%s] Not enough mem (%u < 180000) to mount FATFS for this chip.", __func__, heap_caps_get_total_size(MALLOC_CAP_8BIT));
         wl_ctx.available = 0;
@@ -34,7 +34,7 @@ int fatfs_init() {
     return ESP_OK;
 }
 
-int fatfs_mount() {
+int fatfs_mount(void) {
 #if defined(CONFIG_FATFS_MODE_READ_ONLY)
     int ro = 1;
 #else
@@ -54,6 +54,12 @@ int fatfs_mount() {
         .format_if_mount_failed = false,
         .allocation_unit_size = CONFIG_WL_SECTOR_SIZE,
         .disk_status_check_enable = false};
+    if(wl_ctx.mounted < 0) {
+        WLOG(TAG, "[%s] Previous mount attempt failed, skipping remount", __func__);
+        // fatfs_umount();
+        ret = wl_ctx.mounted;
+        goto done;
+    }
     if(ro)
         ret = esp_vfs_fat_spiflash_mount_ro(wl_ctx.mount_point, wl_ctx.base_label, &mount_config);
     else
@@ -65,6 +71,7 @@ int fatfs_mount() {
             ELOG(TAG, "Failed to initialize fat partition (%s).", esp_err_to_name(ret));
         }
         // esp_event_post(VFS_EVENT, VFS_EVENT_SDCARD_MOUNT_FAILED, 0, 0, portMAX_DELAY);
+        wl_ctx.mounted = ret;
         goto done;
     }
     else {
@@ -85,7 +92,7 @@ int fatfs_format(const char *mountpoint) {
     }
     
     esp_err_t ret = ESP_OK;
-    bool was_mounted = wl_ctx.mounted;
+    int8_t was_mounted = wl_ctx.mounted;
     
     // Suspend VFS monitoring to prevent interference during format
     bool suspended = vfs_suspend_for_maintenance();
@@ -121,13 +128,13 @@ int fatfs_format(const char *mountpoint) {
     return ret;
 }
 
-void fatfs_uninit() {
+void fatfs_uninit(void) {
 #if C_LOG_LEVEL <= LOG_INFO_NUM
     ILOG(TAG, "[%s]", __func__);
 #endif
 }
 
-void fatfs_umount() {
+void fatfs_umount(void) {
 #if C_LOG_LEVEL <= LOG_INFO_NUM
     ILOG(TAG, "[%s]", __func__);
 #endif
@@ -146,14 +153,15 @@ void fatfs_umount() {
         if (ret == ESP_OK)
             ILOG(TAG, "[%s] Filesystem unmounted", __func__);
 #endif
+        if(wl_ctx.mounted > 0)
+            esp_event_post(VFS_EVENT, VFS_EVENT_FAT_PARTITION_UNMOUNTED, 0, 0, portMAX_DELAY);
         wl_ctx.mounted = 0;
-        esp_event_post(VFS_EVENT, VFS_EVENT_FAT_PARTITION_UNMOUNTED, 0, 0, portMAX_DELAY);
         UNUSED_PARAMETER(ret);
     }
 }
 
 bool fatfs_is_mounted(void) {
-    return wl_ctx.mounted;
+    return (wl_ctx.mounted > 0);
 }
 
 #endif

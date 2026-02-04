@@ -10,7 +10,7 @@ extern "C" {
 #include <sys/types.h>
 #include <errno.h>
 
-#include "esp_err.h"
+// #include "esp_err.h"
 
 #include "sdkconfig.h"
 #if (defined(CONFIG_LOGGER_USE_GLOBAL_LOG_LEVEL) && CONFIG_LOGGER_GLOBAL_LOG_LEVEL < CONFIG_LOGGER_VFS_LOG_LEVEL)
