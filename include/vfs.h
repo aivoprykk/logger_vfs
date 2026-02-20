@@ -105,7 +105,8 @@ int s_write(const char *name, const char * base, char *data, size_t len);
 FILE *s_open_file(const char *name, const char * base, const char *mode);
 int s_rename_file(const char *old, const char * n, const char * base);
 int s_rename_file_n(const char *old, const char *n, uint8_t rmifexists);
-int vfs_space_str(char*arg, size_t arglen);
+struct strbf_s;
+int vfs_space_str(struct strbf_s*arg);
 #ifdef __cplusplus
 }
 #endif

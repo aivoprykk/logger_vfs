@@ -135,7 +135,7 @@ static esp_err_t try_open_write(const char *name, const char * mount_point, void
     FUNC_ENTRYD(TAG);
     if (name == 0 || *name == 0)
         return ESP_FAIL;
-        
+
     // Safety check: Don't operate if VFS is not initialized
     // if (!vfs_ctx.vfs_initialized) {
     //     WLOG(TAG, "[%s] VFS not initialized, cannot open file", __func__);
@@ -344,7 +344,7 @@ static esp_err_t m_mount_x(vfs_config_t *p) {
 static bool vfs_mount_all_parts(bool yield_on_each) {
     uint8_t i = 0;
     bool any_success = false;
-    
+
     while (i < VFS_MAX_PARTS) {
         switch (vfs_ctx.parts[i].part_type) {
             case VFS_PART_SDCARD:
@@ -618,10 +618,12 @@ int vfs_select_part(uint8_t log_part_loked) {
         esp_event_post(VFS_EVENT, VFS_EVENT_LOG_PARTITION_CHANGED, NULL, 0, pdMS_TO_TICKS(100));
     }
     //assert(
-        // vfs_ctx.web_part != VFS_PART_MAX && 
+        // vfs_ctx.web_part != VFS_PART_MAX &&
     //    vfs_ctx.gps_log_part != VFS_PART_MAX && vfs_ctx.config_part != VFS_PART_MAX);
     return ESP_OK;
 }
+
+#define VFS_WORKER_TASK_STACK_SIZE 2944
 
 int vfs_init(void) {
     FUNC_ENTRY(TAG);
@@ -630,10 +632,10 @@ int vfs_init(void) {
 #if defined(LOG_LOCAL_LEVEL)
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
 #endif
-    
+
     /* Clear shutdown flag at start of initialization */
     vfs_shutdown_in_progress = false;
-    
+
     // Initialize path buffer semaphore for heap optimization
     // Using binary semaphore instead of mutex to avoid FreeRTOS priority inheritance
     // assertion failures when using timeouts (tasks.c:5261)
@@ -654,7 +656,7 @@ int vfs_init(void) {
             ELOG(TAG, "[%s] Failed to create mount semaphore", __func__);
         }
     }
-    
+
     while(i < VFS_PART_MAX) {
         j = 0, k = 0;
         while(j < VFS_MAX_PARTS) {
@@ -717,7 +719,12 @@ int vfs_init(void) {
         }
 
         if (!mount_task_handle) {
-            if (xTaskCreate(vfs_mount_worker, "vfs_worker", 4096, NULL, tskIDLE_PRIORITY + 1, &mount_task_handle) != pdPASS) {
+            BaseType_t ret = xTaskCreate(vfs_mount_worker, 
+                                        "vfs_worker", 
+                                        VFS_WORKER_TASK_STACK_SIZE, 
+                                        NULL, tskIDLE_PRIORITY + 1,
+                                        &mount_task_handle);
+            if (ret != pdPASS) {
                 ELOG(TAG, "[%s] Failed to create mount worker task", __func__);
             }
         }
@@ -771,7 +778,7 @@ void vfs_pause_monitoring(bool pause) {
 /**
  * @brief Suspend VFS mount monitoring for maintenance operations (format, etc.)
  * @return true if successfully suspended, false if VFS not initialized
- * 
+ *
  * Stops the timer and acquires the path_buffer_mutex to ensure worker is idle.
  * Must be paired with vfs_resume_from_maintenance().
  */
@@ -779,25 +786,25 @@ bool vfs_suspend_for_maintenance(void) {
     if (!vfs_ctx.vfs_initialized) {
         return false;
     }
-    
+
     // Stop timer to prevent new worker wakeups
     if (sd_timer && esp_timer_is_active(sd_timer)) {
         esp_timer_stop(sd_timer);
     }
-    
+
     // Acquire mutex to wait for worker to finish current iteration
     if (path_buffer_mutex && xSemaphoreTake(path_buffer_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
         FUNC_ENTRY_ARGS(TAG, "VFS suspended for maintenance");
         return true;
     }
-    
+
     ELOG(TAG, "[%s] Failed to acquire mutex for maintenance", __func__);
     return false;
 }
 
 /**
  * @brief Resume VFS mount monitoring after maintenance operations
- * 
+ *
  * Releases the path_buffer_mutex and restarts the periodic timer.
  */
 void vfs_resume_from_maintenance(void) {
@@ -805,7 +812,7 @@ void vfs_resume_from_maintenance(void) {
     if (path_buffer_mutex) {
         xSemaphoreGive(path_buffer_mutex);
     }
-    
+
     // Restart timer
     if (vfs_ctx.vfs_initialized && sd_timer && !esp_timer_is_active(sd_timer)) {
         esp_timer_start_periodic(sd_timer, SEC_TO_US(2));
@@ -958,7 +965,7 @@ esp_err_t vfs_post_work(vfs_work_type_t type, void *arg) {
     return ESP_FAIL;
 }
 
-    
+
 
 
 static const char * const down_str[] = {"b", "Kb", "Mb", "Gb"};
@@ -973,11 +980,11 @@ static int vfs_mp_str(uint64_t b, char *buf) {
     uint8_t down = 0;
     char * p = buf;
     double bytes = (double)b;
-    while(down < 3 && bytes > 10000) {
+    while(down < 3 && bytes > 1000) {
         bytes /= 1000;
         ++down;
     }
-    size_t l = f2_to_char(bytes, p);
+    size_t l = xftoa(bytes, p, 2);
     p += l;
     *p = ' ';
     ++p;
@@ -1009,12 +1016,11 @@ void vfs_update_space(void*arg) {
     }
 }
 
-int vfs_space_str(char*arg, size_t arglen) {
+int vfs_space_str(strbf_t *arg) {
     FUNC_ENTRYD(TAG);
     uint8_t i = vfs_ctx.gps_log_part;
     size_t len = 0;
-    const char *p = arg;
-    if(i >= VFS_MAX_PARTS) { 
+    if(i >= VFS_MAX_PARTS) {
         goto end;
     }
     // while(i<VFS_MAX_PARTS) {
@@ -1022,19 +1028,17 @@ int vfs_space_str(char*arg, size_t arglen) {
             // if(i > 0) {
             //     *arg = ',', ++arg;
             // }
-            len = strlen(vfs_ctx.parts[i].mount_point)-1;
-            memcpy(arg, vfs_ctx.parts[i].mount_point+1, len >= arglen ? arglen - 1 : len);
-            arg += len, *arg = ' ', ++arg;
-            arg += vfs_mp_str(vfs_ctx.parts[i].free_bytes, arg);
+            strbf_puts(arg, vfs_ctx.parts[i].mount_point + 1);
+            strbf_putc(arg, ' ');
+            arg->cur += vfs_mp_str(vfs_ctx.parts[i].free_bytes, arg->cur);
         }
         else {
-            memcpy(arg, "- nolog -", 9), arg += 9;
+            strbf_put(arg, "- nolog -", 9);
         }
     //    ++i;
     // }
     end:
-    *arg = 0;
-    return (arg - p);
+    return arg->cur - arg->start;
 }
 
 int vfs_fs_space(const char * mp, uint8_t type, uint64_t *total_bytes, uint64_t *free_bytes, uint64_t *used_bytes) {
@@ -1123,13 +1127,13 @@ FILE *s_open_file(const char *name, const char *base, const char *mode) {
     FUNC_ENTRY_ARGSD(TAG, "%s %s", base ? base : "", name);
     if (name == 0 || name[0] == 0) return 0;
     if (mode == 0) mode = "rb";
-    
+
     /* Quick check: don't even try if shutdown is in progress */
     if (vfs_shutdown_in_progress) {
         DLOG(TAG, "[%s] VFS shutdown in progress, cannot open file", __func__);
         return 0;
     }
-    
+
     // Use shared buffer to reduce stack allocation
     if (path_buffer_mutex && xSemaphoreTake(path_buffer_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         /* Recheck shutdown flag after acquiring mutex */
@@ -1138,13 +1142,13 @@ FILE *s_open_file(const char *name, const char *base, const char *mode) {
             DLOG(TAG, "[%s] VFS shutdown started, cannot open file", __func__);
             return 0;
         }
-        
+
         const char *p;
         get_file_path_width_base(shared_path_buffer, PATH_MAX_CHAR_SIZE, name, base);
         p = (*shared_path_buffer ? shared_path_buffer : name);
         FILE *f = fopen(p, mode);
         xSemaphoreGive(path_buffer_mutex);
-        
+
         if (f == NULL) {
             WLOG(TAG, "[%s] open '%s' failed '%s'.", __FUNCTION__, p, strerror(errno));
             return 0;
@@ -1157,7 +1161,7 @@ FILE *s_open_file(const char *name, const char *base, const char *mode) {
             DLOG(TAG, "[%s] VFS shutdown in progress, cannot open file", __func__);
             return 0;
         }
-        
+
         char path[PATH_MAX_CHAR_SIZE] = {0};
         const char *p;
         get_file_path_width_base(&(path[0]), PATH_MAX_CHAR_SIZE, name, base);
@@ -1185,7 +1189,7 @@ int s_open(const char *name, const char *base, const char *mode) {
     } else if (*(md) == 'a') {
         ++md;
         m = md && *md && (*md == '+') ? O_WRONLY | O_APPEND | O_CREAT : O_WRONLY | O_APPEND;
-        
+
     } else if (*(md) == 'w') {
         ++md;
         m = (md && *md && (*md == '+') ? O_WRONLY | O_CREAT : O_WRONLY)|O_TRUNC;
@@ -1252,7 +1256,7 @@ esp_err_t s_write(const char *name, const char *base, char *data, size_t len) {
 }
 
 char *s_read_from_file(const char *name, const char *base) {
-    FUNC_ENTRY_ARGS(TAG, "%s %s", base ? base : "", name);   
+    FUNC_ENTRY_ARGS(TAG, "%s %s", base ? base : "", name);
     if (name == 0 || name[0] == 0)
         return 0;
     char *buffer = 0;
@@ -1294,7 +1298,7 @@ int s_rename_file_n(const char *old, const char *new, uint8_t rmifexists) {
 }
 
 int s_rename_file(const char *old, const char *new, const char *base) {
-    FUNC_ENTRY_ARGS(TAG, " %s %s %s", base ? base : "", old, new); 
+    FUNC_ENTRY_ARGS(TAG, " %s %s %s", base ? base : "", old, new);
     if (!old || !new)
         return -1;
     char path[PATH_MAX_CHAR_SIZE] = {0};
