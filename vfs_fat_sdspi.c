@@ -65,9 +65,9 @@ static uint32_t init_host_frequency() {
         SDMMC_FREQ_SDR50,
         SDMMC_FREQ_52M,
         SDMMC_FREQ_DDR50,
-        SDMMC_FREQ_HIGHSPEED, 
+        SDMMC_FREQ_HIGHSPEED,
         SDMMC_FREQ_26M,
-        SDMMC_FREQ_DEFAULT, 
+        SDMMC_FREQ_DEFAULT,
         10000
     };
     const int n_freq_values = sizeof(freq_values) / sizeof(freq_values[0]);
@@ -183,11 +183,11 @@ int sdcard_init(void) {
     sdmmc_host_t lhost = SDSPI_HOST_DEFAULT();
     memcpy(&wl_ctx.host, &lhost, sizeof(sdmmc_host_t));
     wl_ctx.host.slot = SDCARD_HOST;
-    
+
     // Set shorter timeouts to avoid blocking when no SD card is present
     // Default is 60000ms (60s), reduce to 2000ms (2s)
     wl_ctx.host.command_timeout_ms = 2000;
-    
+
     // By default, SD card frequency is initialized to SDMMC_FREQ_DEFAULT
     // (20MHz) For setting a specific frequency, use host.max_freq_khz (range
     // 400kHz - 40MHz for SDMMC) Example: for fixed frequency of 10MHz, use
@@ -309,7 +309,7 @@ int sdcard_mount(void) {
 
     // Add timeout protection for mount operation
     uint32_t start_time = esp_timer_get_time() / 1000; // Convert to ms
-    
+
 #if defined(CONFIG_SD_USE_SPI)
     ret = esp_vfs_fat_sdspi_mount(wl_ctx.mount_point, &wl_ctx.host, &wl_ctx.device_config, &mount_config, &wl_ctx.volume_handle);
 #else
