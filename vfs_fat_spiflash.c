@@ -25,12 +25,12 @@ static const char *TAG = "vfs_fat_spiflash";
 #define FATFS_LONG_NAMES 1
 
 int fatfs_init(void) {
-    if(heap_caps_get_total_size(MALLOC_CAP_8BIT) < VFS_MIN_MEM_SIZE_FOR_FLASH_MOUNT) {
-        WLOG(TAG, "[%s] Not enough mem (%u < 180000) to mount FATFS for this chip.", __func__, heap_caps_get_total_size(MALLOC_CAP_8BIT));
+    if(heap_caps_get_total_size(MALLOC_CAP_DEFAULT) < VFS_MIN_MEM_SIZE_FOR_FLASH_MOUNT) {
+        WLOG(TAG, "[%s] Not enough mem (%u < 180000) to mount FATFS for this chip.", __func__, heap_caps_get_total_size(MALLOC_CAP_DEFAULT));
         wl_ctx.available = 0;
         return ESP_ERR_NOT_SUPPORTED;
     }
-    esp_event_post(VFS_EVENT, VFS_EVENT_FAT_PARTITION_INIT_DONE, 0, 0, portMAX_DELAY);
+    esp_event_post(VFS_EVENT, VFS_EVENT_FAT_PARTITION_INIT_DONE, 0, 0, pdMS_TO_TICKS(100));
     return ESP_OK;
 }
 
@@ -154,7 +154,7 @@ void fatfs_umount(void) {
             ILOG(TAG, "[%s] Filesystem unmounted", __func__);
 #endif
         if(wl_ctx.mounted > 0)
-            esp_event_post(VFS_EVENT, VFS_EVENT_FAT_PARTITION_UNMOUNTED, 0, 0, portMAX_DELAY);
+            esp_event_post(VFS_EVENT, VFS_EVENT_FAT_PARTITION_UNMOUNTED, 0, 0, pdMS_TO_TICKS(100));
         wl_ctx.mounted = 0;
         UNUSED_PARAMETER(ret);
     }

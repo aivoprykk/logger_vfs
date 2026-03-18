@@ -8,6 +8,8 @@
 #include <sys/stat.h>
 #include <sys/unistd.h>
 
+#include <esp_heap_caps.h>
+
 #include "vfs.h"
 #include "strbf.h"
 
@@ -864,8 +866,16 @@ int vfs_deinit(void) {
         vfs_work_item_t stop_item = { .type = VFS_WORK_MOUNT_CHECK, .arg = NULL };
         xQueueSend(vfs_work_queue, &stop_item, pdMS_TO_TICKS(10));
     }
-    vTaskDelay(pdMS_TO_TICKS(10));
+    /* Wait up to 500 ms for the mount worker to clear its own handle and exit.
+     * SD card operations can take up to ~300 ms; force-killing the task while
+     * it holds the FatFS internal mutex would corrupt the FAT and prevent a
+     * clean unmount. The worker sets mount_task_handle = NULL before it calls
+     * vTaskDelete(NULL), so polling it is safe. */
+    for (int _vfs_wait = 0; _vfs_wait < 50 && mount_task_handle != NULL; _vfs_wait++) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
     if (mount_task_handle) {
+        FUNC_ENTRY_ARGE(TAG, "mount worker did not exit cleanly after 500 ms, force-killing");
         vTaskDelete(mount_task_handle);
         mount_task_handle = NULL;
     }
@@ -1188,7 +1198,7 @@ int s_open(const char *name, const char *base, const char *mode) {
         m = md && *md && (*md == '+' || *md == 'w') ? O_RDWR : O_RDONLY;
     } else if (*(md) == 'a') {
         ++md;
-        m = md && *md && (*md == '+') ? O_WRONLY | O_APPEND | O_CREAT : O_WRONLY | O_APPEND;
+        m = md && *md && (*md == '+') ? O_WRONLY | O_APPEND | O_CREAT : O_WRONLY | O_APPEND | O_CREAT;
 
     } else if (*(md) == 'w') {
         ++md;
@@ -1229,7 +1239,7 @@ esp_err_t s_write_file(const char *name, const char *base, char *data) {
     if (f == NULL) {
         return ESP_FAIL;
     }
-    fwrite(data, strlen(data), sizeof(data), f);
+    fwrite(data, 1, strlen(data), f);
     fclose(f);
     return ESP_OK;
 }
@@ -1252,7 +1262,7 @@ esp_err_t s_write(const char *name, const char *base, char *data, size_t len) {
     if (close(f)) {
         WLOG(TAG, "Failed to close (%s) fd:%d", strerror(errno), f);
     }
-    return bytes;
+    return bytes >= 0 ? ESP_OK : ESP_FAIL;
 }
 
 char *s_read_from_file(const char *name, const char *base) {
@@ -1263,11 +1273,16 @@ char *s_read_from_file(const char *name, const char *base) {
     int f = s_open(name, base, "rb");
     if (f >= 0) {
         off_t flength = s_xstat_file_size(f);
-        buffer = malloc(flength + 1 * sizeof(char));
+        buffer = heap_caps_malloc((flength + 1) * sizeof(char), MALLOC_CAP_DEFAULT);
+        if (!buffer) {
+            WLOG(TAG, "Failed to allocate %ld bytes for file read", (long)(flength + 1));
+            close(f);
+            return 0;
+        }
         int err = read(f, buffer, sizeof(char) * flength);
         if (err < 0) {
             WLOG(TAG, "Failed to read (%s) fd:%d", strerror(errno), f);
-            free(buffer);
+            heap_caps_free(buffer);
             buffer = 0;
         } else
             buffer[flength] = 0;
